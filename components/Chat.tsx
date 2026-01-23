@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Message } from '../types';
-import { getGeminiResponse, playTTS } from '../services/geminiService';
+import { getGeminiResponse, getGeminiAudioResponse, playTTS } from '../services/geminiService';
 
 const Chat: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -10,7 +10,11 @@ const Chat: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -20,14 +24,15 @@ const Chat: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
+  const handleSendMessage = async (e?: React.FormEvent, manualText?: string) => {
     e?.preventDefault();
-    if (!inputText.trim() || isLoading) return;
+    const textToSend = manualText || inputText;
+    if (!textToSend.trim() || isLoading) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: inputText,
+      content: textToSend,
       timestamp: Date.now()
     };
 
@@ -35,7 +40,7 @@ const Chat: React.FC = () => {
     setInputText('');
     setIsLoading(true);
 
-    const aiResponseContent = await getGeminiResponse(inputText);
+    const aiResponseContent = await getGeminiResponse(textToSend);
     
     const aiMessage: Message = {
       id: (Date.now() + 1).toString(),
@@ -47,7 +52,74 @@ const Chat: React.FC = () => {
     setMessages(prev => [...prev, aiMessage]);
     setIsLoading(false);
 
-    // Speak the response
+    setIsSpeaking(true);
+    await playTTS(aiResponseContent);
+    setIsSpeaking(false);
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Audio = (reader.result as string).split(',')[1];
+          await handleVoiceInput(base64Audio);
+        };
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Microphone access denied:", err);
+      alert("无法使用麦克风，请检查权限。");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleVoiceInput = async (base64Audio: string) => {
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: '🎙️ [语音消息]',
+      timestamp: Date.now()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    const aiResponseContent = await getGeminiAudioResponse(base64Audio);
+
+    const aiMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: aiResponseContent,
+      timestamp: Date.now()
+    };
+
+    setMessages(prev => [...prev, aiMessage]);
+    setIsLoading(false);
+
     setIsSpeaking(true);
     await playTTS(aiResponseContent);
     setIsSpeaking(false);
@@ -81,32 +153,63 @@ const Chat: React.FC = () => {
       </div>
 
       {/* Quick Suggestions */}
-      <div className="p-4 overflow-x-auto whitespace-nowrap gap-2 flex bg-slate-50 border-t border-slate-200">
-        {['讲个笑话', '今天天气', '我该吃药了吗？', '讲个新闻'].map(suggestion => (
-          <button
-            key={suggestion}
-            onClick={() => setInputText(suggestion)}
-            className="bg-white border border-slate-200 px-4 py-2 rounded-full text-slate-600 active-scale"
+      {!isRecording && (
+        <div className="p-4 overflow-x-auto whitespace-nowrap gap-2 flex bg-slate-50 border-t border-slate-200">
+          {['讲个笑话', '今天天气', '该吃药了吗？', '讲个新闻'].map(suggestion => (
+            <button
+              key={suggestion}
+              onClick={() => handleSendMessage(undefined, suggestion)}
+              className="bg-white border border-slate-200 px-4 py-2 rounded-full text-slate-600 active-scale"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Recording Overlay UI */}
+      {isRecording && (
+        <div className="absolute inset-0 bg-blue-900/60 backdrop-blur-sm z-[60] flex flex-col items-center justify-center p-6 text-white">
+          <div className="relative mb-8">
+            <div className="w-32 h-32 bg-blue-500 rounded-full flex items-center justify-center animate-pulse">
+              <span className="text-6xl">🎙️</span>
+            </div>
+            <div className="absolute inset-0 border-4 border-blue-400 rounded-full animate-ping"></div>
+          </div>
+          <p className="text-3xl font-bold mb-2">正在听您说话...</p>
+          <p className="text-xl opacity-80 mb-12">说完了请松手或点击下方停止</p>
+          <button 
+            onClick={stopRecording}
+            className="bg-red-500 text-white px-12 py-6 rounded-full text-2xl font-bold shadow-2xl active-scale"
           >
-            {suggestion}
+            说好了，发送
           </button>
-        ))}
-      </div>
+        </div>
+      )}
 
       {/* Input Area */}
-      <div className="p-4 bg-white border-t border-slate-100">
-        <form onSubmit={handleSendMessage} className="flex gap-2">
+      <div className="p-4 bg-white border-t border-slate-100 flex gap-2 items-center">
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`shrink-0 w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-lg active-scale transition-all ${
+            isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-blue-600 text-white'
+          }`}
+        >
+          {isRecording ? '⏹️' : '🎙️'}
+        </button>
+        
+        <form onSubmit={handleSendMessage} className="flex-1 flex gap-2">
           <input
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="点击这里输入文字..."
+            placeholder="或者点击这里打字..."
             className="flex-1 bg-slate-100 rounded-2xl px-6 py-4 text-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
             type="submit"
-            disabled={isLoading || !inputText.trim()}
-            className="bg-blue-600 text-white w-14 h-14 rounded-2xl flex items-center justify-center text-2xl disabled:opacity-50 active-scale"
+            disabled={isLoading || !inputText.trim() || isRecording}
+            className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center text-2xl disabled:opacity-50 active-scale"
           >
             🚀
           </button>
@@ -114,7 +217,7 @@ const Chat: React.FC = () => {
       </div>
 
       {isSpeaking && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm animate-pulse">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm animate-pulse z-[70]">
           <span className="text-xl">🔊</span> 小玲正在为您朗读...
         </div>
       )}

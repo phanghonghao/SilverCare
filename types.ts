@@ -19,5 +19,13 @@ export enum AppRoute {
   CHAT = 'chat',
   REMINDERS = 'reminders',
   HEALTH = 'health',
-  GUARDIAN = 'guardian'
+  GUARDIAN = 'guardian',
+  SAFETY = 'safety'
+}
+
+export interface SensorData {
+  x: number;
+  y: number;
+  z: number;
+  magnitude: number;
 }

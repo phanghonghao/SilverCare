@@ -6,10 +6,13 @@ import Chat from './components/Chat';
 import Reminders from './components/Reminders';
 import Health from './components/Health';
 import Guardian from './components/Guardian';
+import FallMonitor from './components/FallMonitor';
+import EmergencyAlert from './components/EmergencyAlert';
 import Navigation from './components/Navigation';
 
 const App: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(AppRoute.HOME);
+  const [isEmergency, setIsEmergency] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([
     { id: '1', time: '08:30', title: '吃降压药', type: 'med', completed: false },
     { id: '2', time: '10:00', title: '喝一大杯水', type: 'water', completed: false },
@@ -21,6 +24,10 @@ const App: React.FC = () => {
     setReminders(prev => prev.map(r => r.id === id ? { ...r, completed: !r.completed } : r));
   };
 
+  const handleFallDetected = () => {
+    setIsEmergency(true);
+  };
+
   const renderView = () => {
     switch (currentRoute) {
       case AppRoute.HOME:
@@ -29,6 +36,8 @@ const App: React.FC = () => {
         return <Chat />;
       case AppRoute.GUARDIAN:
         return <Guardian />;
+      case AppRoute.SAFETY:
+        return <FallMonitor onFallDetected={handleFallDetected} />;
       case AppRoute.REMINDERS:
         return <Reminders reminders={reminders} onToggle={toggleReminder} />;
       case AppRoute.HEALTH:
@@ -40,6 +49,11 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative">
+      {/* Emergency Overlay */}
+      {isEmergency && (
+        <EmergencyAlert onCancel={() => setIsEmergency(false)} />
+      )}
+
       {/* Status Bar / Top Header */}
       <header className="bg-blue-600 text-white p-4 pt-8 shadow-md shrink-0">
         <div className="flex justify-between items-center">

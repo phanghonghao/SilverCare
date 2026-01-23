@@ -11,9 +11,9 @@ const Navigation: React.FC<NavigationProps> = ({ currentRoute, setRoute }) => {
   const navItems = [
     { route: AppRoute.HOME, label: '首页', icon: '🏠' },
     { route: AppRoute.CHAT, label: '聊天', icon: '💬' },
-    { route: AppRoute.GUARDIAN, label: '守卫', icon: '🛡️' },
+    { route: AppRoute.SAFETY, label: '安全', icon: '🛡️' },
+    { route: AppRoute.GUARDIAN, label: '守卫', icon: '👁️' },
     { route: AppRoute.REMINDERS, label: '提醒', icon: '⏰' },
-    { route: AppRoute.HEALTH, label: '健康', icon: '❤️' },
   ];
 
   return (
@@ -27,7 +27,7 @@ const Navigation: React.FC<NavigationProps> = ({ currentRoute, setRoute }) => {
           }`}
         >
           <span className="text-2xl mb-1">{item.icon}</span>
-          <span className="text-xs font-medium">{item.label}</span>
+          <span className="text-[10px] font-medium leading-none">{item.label}</span>
           {currentRoute === item.route && (
             <div className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1"></div>
           )}
