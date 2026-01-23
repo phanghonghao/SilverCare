@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { AppRoute, Reminder } from '../types';
 
@@ -91,7 +92,10 @@ const Home: React.FC<HomeProps> = ({ setRoute, reminders }) => {
     <div className="p-4 space-y-6">
       {/* Large Clock Display */}
       <section className="flex flex-col items-center justify-center py-4">
-        <h1 className="text-7xl font-bold text-slate-800 tracking-tighter leading-none">
+        <h1 
+          className="text-8xl text-slate-800 leading-none tracking-widest" 
+          style={{ fontFamily: "'Share Tech Mono', monospace" }}
+        >
           {currentTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}
         </h1>
         <p className="text-xl text-slate-500 font-medium mt-2">
