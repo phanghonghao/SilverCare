@@ -7,6 +7,13 @@ export interface Reminder {
   completed: boolean;
 }
 
+export interface Alarm {
+  id: string;
+  time: string;
+  label: string;
+  enabled: boolean;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -20,7 +27,8 @@ export enum AppRoute {
   REMINDERS = 'reminders',
   HEALTH = 'health',
   GUARDIAN = 'guardian',
-  SAFETY = 'safety'
+  SAFETY = 'safety',
+  ALARM = 'alarm'
 }
 
 export interface SensorData {

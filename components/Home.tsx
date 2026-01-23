@@ -75,8 +75,8 @@ const Home: React.FC<HomeProps> = ({ setRoute, reminders }) => {
     // Android 通常直接支持，但 iOS 需要触发动作
     if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
       try {
-        const res = await (DeviceMotionEvent as any).requestPermission();
-        setPerms(p => ({ ...p, motion: res === 'granted' ? 'granted' : 'denied' }));
+        const permission = await (DeviceMotionEvent as any).requestPermission();
+        setPerms(p => ({ ...p, motion: permission === 'granted' ? 'granted' : 'denied' }));
       } catch (e) {
         setPerms(p => ({ ...p, motion: 'denied' }));
       }
@@ -93,12 +93,11 @@ const Home: React.FC<HomeProps> = ({ setRoute, reminders }) => {
       {/* Large Clock Display */}
       <section className="flex flex-col items-center justify-center py-4">
         <h1 
-          className="text-8xl text-slate-800 leading-none tracking-widest" 
-          style={{ fontFamily: "'Share Tech Mono', monospace" }}
+          className="text-9xl text-slate-800 leading-none font-time font-bold"
         >
           {currentTime.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}
         </h1>
-        <p className="text-xl text-slate-500 font-medium mt-2">
+        <p className="text-xl text-slate-500 font-medium mt-4 tracking-wider">
           {currentTime.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
         </p>
       </section>
