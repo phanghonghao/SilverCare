@@ -1,6 +1,6 @@
 {
   "name": "SilverCare-AI",
-  "description": "专为老年人设计的AI关怀应用，提供智能语音对话、用药提醒、健康监测及紧急求助功能，采用大字体、高对比度的易用界面。",
+  "description": "SilverCare-专为老年人设计的AI关怀应用，提供智能语音对话、用药提醒、健康监测及紧急求助功能，采用大字体、高对比度的易用界面。",
   "requestFramePermissions": [
     "microphone",
     "camera",
