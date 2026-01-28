@@ -2,116 +2,125 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { decode, decodeAudioData } from "../utils/audioUtils";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+const SYSTEM_INSTRUCTION = "你是一个温柔、耐心的老年人关怀助手，名叫'小玲'。你的任务是陪伴老人，回答他们的问题，语气要像家人一样亲切。请使用简单易懂的词汇，遇到药品说明时要特别提醒遵医嘱。";
 
-const SYSTEM_INSTRUCTION = "你是一个温柔、耐心的老年人关怀助手，名叫'小玲'。你的任务是陪伴老人，回答他们的问题，提醒他们保持健康，语气要像家人一样亲切。请使用简单易懂的词汇。";
+const TEXT_MODEL = 'gemini-3-flash-preview';
+const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
-// 使用推荐的最新模型，性能更好且支持更广
-const MODEL_NAME = 'gemini-3-flash-preview';
+// 本地存储的 Key 名
+const STORAGE_KEY = 'SILVERCARE_USER_API_KEY';
+
+/**
+ * 保存用户输入的密钥
+ */
+export const saveUserApiKey = (key: string) => {
+  if (key.trim()) {
+    localStorage.setItem(STORAGE_KEY, key.trim());
+    return true;
+  }
+  return false;
+};
+
+/**
+ * 获取当前有效的 API Key
+ */
+export const getActiveApiKey = () => {
+  return localStorage.getItem(STORAGE_KEY) || process.env.API_KEY || "";
+};
+
+/**
+ * 获取 AI 实例
+ */
+const getAI = () => {
+  const apiKey = getActiveApiKey();
+  if (!apiKey) {
+    throw new Error("NO_API_KEY");
+  }
+  return new GoogleGenAI({ apiKey });
+};
+
+export const getApiKeyStatus = () => {
+  const userKey = localStorage.getItem(STORAGE_KEY);
+  const envKey = process.env.API_KEY;
+  
+  if (userKey) return { source: "已手动配置密钥", display: `${userKey.substring(0, 6)}...${userKey.substring(userKey.length - 4)}`, configured: true };
+  if (envKey) return { source: "系统注入密钥", display: `${envKey.substring(0, 6)}...${envKey.substring(envKey.length - 4)}`, configured: true };
+  
+  return { source: "未配置密钥", display: "无", configured: false };
+};
 
 export const getGeminiResponse = async (prompt: string) => {
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: TEXT_MODEL,
       contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-      }
+      config: { systemInstruction: SYSTEM_INSTRUCTION }
     });
     return response.text || "对不起，我没听清楚，请再说一遍。";
   } catch (error: any) {
-    console.error("Gemini Error:", error);
-    // 针对免费版额度限制的特殊处理
-    if (error?.message?.includes('429')) {
-      return "对不起，小玲现在有点忙（请求太频繁了），请稍等一分钟再跟我聊天吧。";
-    }
-    return "网络好像有点累了，休息一下再聊吧。";
+    console.error("Gemini API Error:", error);
+    if (error.message === "NO_API_KEY") return "ERROR_NO_KEY";
+    return "小玲连接不到大脑了，请检查网络或点击首页“配置密钥”。";
   }
 };
 
-export const getGeminiAudioResponse = async (base64Audio: string) => {
+export const explainEverything = async (base64Image: string) => {
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: TEXT_MODEL,
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: 'audio/webm;codecs=opus',
-              data: base64Audio,
-            },
-          },
-          {
-            text: "请听这段老人的语音并给出亲切的回答。",
-          },
-        ],
+          { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
+          { text: "请帮我看看图片里是什么。用通俗易懂的大白话解释。" }
+        ]
       },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-      }
+      config: { systemInstruction: SYSTEM_INSTRUCTION }
     });
-    return response.text || "对不起，我没听清楚，请再说一遍。";
-  } catch (error: any) {
-    console.error("Gemini Audio Error:", error);
-    if (error?.message?.includes('429')) {
-      return "对不起，小玲现在有点忙，请稍等一分钟再说话。";
-    }
-    return "抱歉，刚才信号不太好，能请您再说一次吗？";
+    return response.text || "没看清楚。";
+  } catch (error) {
+    return "网络不太稳定，看图失败。";
   }
 };
 
 export const identifyPerson = async (base64Image: string) => {
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+      model: TEXT_MODEL,
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: base64Image,
-            },
-          },
-          {
-            text: "分析这张图片中的人。已知熟人名单：1. 儿子小明（戴眼镜，微胖，穿蓝色外套）；2. 女儿小红（长发，爱笑，穿红色毛衣）；3. 邻居王大爷（白头发，慈祥）。如果图片中的人符合描述，请告诉我他是谁；如果不符合，请委婉地提醒我可能有陌生人，并告诉我这个人的特征。回答要亲切，像在跟长辈说话。",
-          },
-        ],
+          { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
+          { text: "请看看门口是谁？如果是陌生人，请提醒我注意安全。" }
+        ]
       },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-      }
+      config: { systemInstruction: SYSTEM_INSTRUCTION }
     });
-    return response.text || "画面太模糊了，我看不清是谁。";
-  } catch (error: any) {
-    console.error("Vision Error:", error);
-    return "小玲现在看不清画面，请稍后再试。";
+    return response.text || "看不太清。";
+  } catch (error) {
+    return "功能暂时不可用。";
   }
 };
 
 export const playTTS = async (text: string) => {
   try {
+    const apiKey = getActiveApiKey();
+    if (!apiKey) return false;
+    
+    const ai = getAI();
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `用亲切自然的声音说：${text}` }] }],
+      model: TTS_MODEL,
+      contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Kore' },
-          },
-        },
-      },
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
+      }
     });
-
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (base64Audio) {
       const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-      const audioBuffer = await decodeAudioData(
-        decode(base64Audio),
-        outputAudioContext,
-        24000,
-        1,
-      );
+      const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, 24000, 1);
       const source = outputAudioContext.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(outputAudioContext.destination);
@@ -120,7 +129,6 @@ export const playTTS = async (text: string) => {
     }
     return false;
   } catch (error) {
-    console.error("TTS Error:", error);
     return false;
   }
 };

@@ -25,10 +25,19 @@ export enum AppRoute {
   HOME = 'home',
   CHAT = 'chat',
   REMINDERS = 'reminders',
-  HEALTH = 'health',
-  GUARDIAN = 'guardian',
+  VISION = 'vision',
+  FAMILY = 'family',
+  ALARM = 'alarm',
   SAFETY = 'safety',
-  ALARM = 'alarm'
+  LIVE_CALL = 'live_call' // 新增即時視訊通話
+}
+
+export interface FamilyNote {
+  id: string;
+  sender: string;
+  content: string;
+  image?: string;
+  time: string;
 }
 
 export interface SensorData {

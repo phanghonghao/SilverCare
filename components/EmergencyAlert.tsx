@@ -6,15 +6,24 @@ interface EmergencyAlertProps {
   onCancel: () => void;
 }
 
-const EMERGENCY_PHONE = "13800138000"; // 预设的紧急联系人电话
-
 const EmergencyAlert: React.FC<EmergencyAlertProps> = ({ onCancel }) => {
   const [countdown, setCountdown] = useState(3);
   const [isCalling, setIsCalling] = useState(false);
   const [location, setLocation] = useState<{lat: number, lng: number} | null>(null);
   const [locError, setLocError] = useState<string | null>(null);
+  const [emergencyPhone, setEmergencyPhone] = useState("666"); // 默認值
 
   useEffect(() => {
+    // 優先讀取緊急號碼
+    const savedEmergency = localStorage.getItem('SILVERCARE_EMERGENCY_PHONE');
+    const savedFamily = localStorage.getItem('SILVERCARE_FAMILY_PHONE');
+    
+    if (savedEmergency) {
+      setEmergencyPhone(savedEmergency);
+    } else if (savedFamily) {
+      setEmergencyPhone(savedFamily);
+    }
+
     // 强制获取位置
     const fetchLoc = () => {
       if ("geolocation" in navigator) {
@@ -55,9 +64,9 @@ const EmergencyAlert: React.FC<EmergencyAlertProps> = ({ onCancel }) => {
   const startEmergencyCall = () => {
     setIsCalling(true);
     
-    // 触发安卓原生拨号
+    // 触发安卓原生拨号，使用讀取到的號碼
     try {
-      window.location.href = `tel:${EMERGENCY_PHONE}`;
+      window.location.href = `tel:${emergencyPhone}`;
     } catch (e) {
       console.error("Dialer failed", e);
     }
@@ -76,7 +85,7 @@ const EmergencyAlert: React.FC<EmergencyAlertProps> = ({ onCancel }) => {
           <span className="text-7xl">📞</span>
         </div>
         <h2 className="text-5xl font-black mb-4">呼救已发出</h2>
-        <p className="text-2xl text-blue-400 mb-10">联系人：儿子小明</p>
+        <p className="text-2xl text-blue-400 mb-10">呼叫中：{emergencyPhone}</p>
         
         <div className="bg-white/10 p-8 rounded-[40px] mb-10 w-full text-left backdrop-blur-md border border-white/20">
           <h4 className="text-sm text-blue-300 mb-4 uppercase font-black tracking-widest">救援任务简报：</h4>
@@ -96,7 +105,7 @@ const EmergencyAlert: React.FC<EmergencyAlertProps> = ({ onCancel }) => {
 
         <div className="flex flex-col gap-6 w-full">
           <button 
-            onClick={() => window.location.href = `tel:${EMERGENCY_PHONE}`}
+            onClick={() => window.location.href = `tel:${emergencyPhone}`}
             className="bg-blue-600 w-full py-8 rounded-[30px] text-3xl font-black shadow-2xl active-scale"
           >
             再次点击拨号
@@ -121,7 +130,7 @@ const EmergencyAlert: React.FC<EmergencyAlertProps> = ({ onCancel }) => {
       </div>
 
       <div className="flex flex-col items-center gap-6 w-full">
-        <p className="text-4xl font-black">{countdown} 秒后开始报警</p>
+        <p className="text-4xl font-black">{countdown} 秒后自动呼叫</p>
         <div className="w-full max-w-sm h-6 bg-white/30 rounded-full overflow-hidden border-2 border-white/20">
           <div 
             className="h-full bg-white transition-all duration-1000 ease-linear shadow-[0_0_15px_white]"
