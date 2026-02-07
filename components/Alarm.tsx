@@ -1,42 +1,52 @@
 
 import React, { useState } from 'react';
 import { Alarm } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface AlarmProps {
   alarms: Alarm[];
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onAdd: (time: string, label: string) => void;
+  onBack: () => void;
 }
 
-const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAdd }) => {
+const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAdd, onBack }) => {
+  const { t } = useLanguage();
   const [showAdd, setShowAdd] = useState(false);
   const [newTime, setNewTime] = useState("08:00");
-  const [newLabel, setNewLabel] = useState("起床闹钟");
+  const [newLabel, setNewLabel] = useState(t('label_wake'));
 
   const commonTimes = [
-    { t: "07:00", l: "早起" },
-    { t: "12:30", l: "午睡" },
-    { t: "14:00", l: "午觉醒来" },
-    { t: "21:00", l: "晚间休息" }
+    { t: "07:00", l: t('label_wake') },
+    { t: "12:30", l: t('label_nap') },
+    { t: "21:00", l: t('label_rest') }
   ];
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-3xl font-bold text-slate-800">我的闹钟</h2>
-        <button 
-          onClick={() => setShowAdd(true)}
-          className="bg-blue-600 text-white px-6 py-2 rounded-full font-bold shadow-md active-scale"
-        >
-          + 添加闹钟
-        </button>
+        <h2 className="text-3xl font-bold text-slate-800">{t('alarm_title')}</h2>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setShowAdd(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-full font-bold shadow-md active-scale"
+          >
+            {t('add_alarm')}
+          </button>
+          <button 
+            onClick={onBack}
+            className="bg-slate-100 px-6 py-2 rounded-full font-bold text-slate-600 active-scale"
+          >
+            {t('back')}
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4">
         {alarms.length === 0 ? (
           <div className="bg-white p-10 rounded-3xl text-center border-2 border-dashed border-slate-200">
-            <p className="text-slate-400 text-xl">还没有闹钟，点击上方按钮添加</p>
+            <p className="text-slate-400 text-xl">{t('no_alarm')}</p>
           </div>
         ) : (
           alarms.map((alarm) => (
@@ -54,7 +64,6 @@ const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAd
                   {alarm.time}
                 </p>
               </div>
-              
               <div className="flex items-center gap-4">
                 <button 
                   onClick={() => onToggle(alarm.id)}
@@ -81,10 +90,10 @@ const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAd
       {showAdd && (
         <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-sm rounded-[40px] p-8 shadow-2xl animate-bounce-in">
-            <h3 className="text-2xl font-bold mb-6 text-center text-slate-800">设定新闹钟</h3>
+            <h3 className="text-2xl font-bold mb-6 text-center text-slate-800">{t('set_alarm')}</h3>
             <div className="space-y-6">
               <div>
-                <label className="block text-slate-500 mb-2">选择时间</label>
+                <label className="block text-slate-500 mb-2">{t('select_time')}</label>
                 <input 
                   type="time" 
                   value={newTime}
@@ -93,7 +102,7 @@ const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAd
                 />
               </div>
               <div>
-                <label className="block text-slate-500 mb-2">闹钟标签</label>
+                <label className="block text-slate-500 mb-2">{t('alarm_label')}</label>
                 <input 
                   type="text" 
                   value={newLabel}
@@ -101,7 +110,6 @@ const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAd
                   className="w-full text-xl p-4 bg-slate-100 rounded-2xl focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              
               <div className="flex flex-wrap gap-2">
                 {commonTimes.map(ct => (
                   <button 
@@ -113,19 +121,15 @@ const AlarmComponent: React.FC<AlarmProps> = ({ alarms, onToggle, onDelete, onAd
                   </button>
                 ))}
               </div>
-
               <div className="flex gap-4 pt-4">
-                <button 
-                  onClick={() => setShowAdd(false)}
-                  className="flex-1 py-4 text-slate-500 font-bold"
-                >
-                  取消
+                <button onClick={() => setShowAdd(false)} className="flex-1 py-4 text-slate-500 font-bold">
+                  {t('cancel')}
                 </button>
                 <button 
                   onClick={() => { onAdd(newTime, newLabel); setShowAdd(false); }}
                   className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-200 active-scale"
                 >
-                  保存闹钟
+                  {t('save')}
                 </button>
               </div>
             </div>

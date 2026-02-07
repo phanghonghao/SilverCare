@@ -1,16 +1,18 @@
 
 import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { useLanguage } from '../contexts/LanguageContext';
 
 const Health: React.FC = () => {
+  const { t } = useLanguage();
   const stepData = [
-    { day: '周一', steps: 4200 },
-    { day: '周二', steps: 3800 },
-    { day: '周三', steps: 5100 },
-    { day: '周四', steps: 4600 },
-    { day: '周五', steps: 6200 },
-    { day: '周六', steps: 5800 },
-    { day: '周日', steps: 4500 },
+    { day: 'Mon', steps: 4200 },
+    { day: 'Tue', steps: 3800 },
+    { day: 'Wed', steps: 5100 },
+    { day: 'Thu', steps: 4600 },
+    { day: 'Fri', steps: 6200 },
+    { day: 'Sat', steps: 5800 },
+    { day: 'Sun', steps: 4500 },
   ];
 
   const heartRateData = [
@@ -25,29 +27,29 @@ const Health: React.FC = () => {
 
   return (
     <div className="p-4 space-y-6">
-      <h2 className="text-3xl font-bold text-slate-800 mb-4">健康监测</h2>
+      <h2 className="text-3xl font-bold text-slate-800 mb-4">{t('health_monitor')}</h2>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <p className="text-slate-500 mb-1">今日步数</p>
+          <p className="text-slate-500 mb-1">{t('steps_today')}</p>
           <p className="text-4xl font-bold text-blue-600">5,823</p>
           <div className="h-1 bg-slate-100 mt-4 rounded-full overflow-hidden">
             <div className="h-full bg-blue-500 w-[70%]"></div>
           </div>
         </div>
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-          <p className="text-slate-500 mb-1">心率</p>
+          <p className="text-slate-500 mb-1">{t('heart_rate')}</p>
           <p className="text-4xl font-bold text-red-500">75 <span className="text-sm">bpm</span></p>
-          <p className="text-green-500 text-sm mt-2">● 正常范围</p>
+          <p className="text-green-500 text-sm mt-2">{t('normal_range')}</p>
         </div>
       </div>
 
       {/* Steps Chart */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
         <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center justify-between">
-          <span>走步趋势</span>
-          <span className="text-sm font-normal text-slate-400">最近7天</span>
+          <span>{t('step_trend')}</span>
+          <span className="text-sm font-normal text-slate-400">{t('last_7_days')}</span>
         </h3>
         <div className="h-48 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -70,8 +72,8 @@ const Health: React.FC = () => {
       {/* Heart Rate Chart */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
         <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center justify-between">
-          <span>心率变化</span>
-          <span className="text-sm font-normal text-slate-400">今日</span>
+          <span>{t('hr_trend')}</span>
+          <span className="text-sm font-normal text-slate-400">{t('today')}</span>
         </h3>
         <div className="h-48 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -85,11 +87,12 @@ const Health: React.FC = () => {
       </section>
 
       <div className="bg-green-50 p-6 rounded-3xl border border-green-100">
-        <p className="text-green-800 font-bold mb-2">医生建议：</p>
-        <p className="text-green-700 leading-relaxed">您的健康状况非常稳定。建议傍晚时分多走500步，有助于睡眠。</p>
+        <p className="text-green-800 font-bold mb-2">{t('doctor_advice')}</p>
+        <p className="text-green-700 leading-relaxed">{t('advice_content')}</p>
       </div>
     </div>
   );
 };
 
 export default Health;
+    
