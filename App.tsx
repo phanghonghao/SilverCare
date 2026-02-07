@@ -257,6 +257,20 @@ const App: React.FC = () => {
     setReminders(prev => prev.filter(r => r.id !== id));
   };
 
+  const handleToggleReminder = (id: string) => {
+    const reminder = reminders.find(r => r.id === id);
+    if (!reminder) return;
+
+    // 关键修改：如果是药品且未完成，强制进入录像模式
+    if (reminder.type === 'med' && !reminder.completed) {
+      setMedToCapture(reminder.title);
+      setRoute(AppRoute.MED_CAPTURE);
+    } else {
+      // 其他类型或取消完成，正常切换
+      setReminders(prev => prev.map(r => r.id === id ? {...r, completed: !r.completed} : r));
+    }
+  };
+
   const renderView = () => {
     if (currentRoute === AppRoute.TEST) return <TestCenter onBack={handleBack} />;
     if (userRole === UserRole.UNDETERMINED) return <RoleDetection onRoleDetected={setUserRole} />;
@@ -270,7 +284,7 @@ const App: React.FC = () => {
       case AppRoute.REMINDERS: return <Reminders 
         reminders={reminders} 
         onBack={handleBack} 
-        onToggle={(id) => setReminders(p => p.map(r => r.id === id ? {...r, completed: !r.completed} : r))}
+        onToggle={handleToggleReminder}
         onAdd={handleAddReminder}
         onDelete={handleDeleteReminder}
       />;

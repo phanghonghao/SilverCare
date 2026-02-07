@@ -11,6 +11,7 @@ const GuardianDashboard: React.FC = () => {
   const [logs, setLogs] = useState<HealthLog[]>([]);
   const [medRecords, setMedRecords] = useState<MedRecord[]>([]);
   const [selectedImg, setSelectedImg] = useState<string | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null); // New state for video
   const [isOnline, setIsOnline] = useState(false);
   const [showMirror, setShowMirror] = useState(false);
   const [showAlarmConfig, setShowAlarmConfig] = useState(false);
@@ -111,15 +112,30 @@ const GuardianDashboard: React.FC = () => {
                   medRecords.map(record => (
                     <div key={record.id} className="min-w-[150px] bg-slate-50 rounded-2xl p-3 border border-slate-100">
                       <div 
-                        onClick={() => record.evidenceImage && setSelectedImg(record.evidenceImage)}
-                        className="w-full h-28 bg-slate-200 rounded-xl mb-2 overflow-hidden cursor-pointer relative"
+                        onClick={() => {
+                          if (record.videoData) setSelectedVideo(record.videoData);
+                          else if (record.evidenceImage) setSelectedImg(record.evidenceImage);
+                        }}
+                        className="w-full h-28 bg-slate-200 rounded-xl mb-2 overflow-hidden cursor-pointer relative group"
                       >
                         {record.evidenceImage ? (
                           <img src={`data:image/jpeg;base64,${record.evidenceImage}`} className="w-full h-full object-cover" alt="Med" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">{t('no_image')}</div>
                         )}
-                        <div className="absolute top-2 right-2 bg-black/40 px-2 py-0.5 rounded-full text-[8px] text-white">{t('proof_photo')}</div>
+                        
+                        {/* 视频标记 */}
+                        {record.videoData && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors">
+                             <div className="w-8 h-8 rounded-full bg-white/90 flex items-center justify-center pl-1 shadow-md">
+                               <div className="w-0 h-0 border-t-[5px] border-t-transparent border-l-[8px] border-l-blue-600 border-b-[5px] border-b-transparent"></div>
+                             </div>
+                          </div>
+                        )}
+
+                        <div className="absolute top-2 right-2 bg-black/40 px-2 py-0.5 rounded-full text-[8px] text-white">
+                          {record.videoData ? '视频存证' : t('proof_photo')}
+                        </div>
                       </div>
                       <p className="text-xs font-black text-slate-700">{record.medName}</p>
                       <p className="text-[10px] text-slate-400">{record.time}</p>
@@ -167,10 +183,28 @@ const GuardianDashboard: React.FC = () => {
         </div>
       )}
 
-      {selectedImg && (
+      {selectedImg && !selectedVideo && (
         <div className="fixed inset-0 z-[1200] bg-black/95 flex flex-col items-center justify-center p-6" onClick={() => setSelectedImg(null)}>
           <img src={`data:image/jpeg;base64,${selectedImg}`} className="w-full rounded-[40px] shadow-2xl border-2 border-white/20" alt="Preview" />
           <p className="text-white mt-8 text-xl font-black">{t('original_image')}</p>
+        </div>
+      )}
+
+      {selectedVideo && (
+        <div className="fixed inset-0 z-[1200] bg-black/95 flex flex-col items-center justify-center p-6">
+          <div className="w-full max-w-lg bg-black rounded-[40px] overflow-hidden border-2 border-slate-700 shadow-2xl relative">
+             <video 
+               src={`data:video/webm;base64,${selectedVideo}`} 
+               controls 
+               autoPlay 
+               className="w-full h-auto"
+             />
+             <button 
+               onClick={() => setSelectedVideo(null)} 
+               className="absolute top-4 right-4 text-white bg-black/50 w-10 h-10 rounded-full font-bold border border-white/20"
+             >✕</button>
+          </div>
+          <p className="text-white mt-8 text-xl font-black">📹 5秒服药录像回放</p>
         </div>
       )}
     </div>
@@ -178,4 +212,3 @@ const GuardianDashboard: React.FC = () => {
 };
 
 export default GuardianDashboard;
-    

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppRoute, Reminder, Language } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { playTTS } from '../services/geminiService';
 
 interface HomeProps {
   setRoute: (route: AppRoute) => void;
@@ -35,6 +36,7 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
   });
 
   const [hasCompletedSetup, setHasCompletedSetup] = useState(false);
+  const [forceShowSetup, setForceShowSetup] = useState(false);
 
   useEffect(() => {
     const savedPhone = localStorage.getItem('SILVERCARE_FAMILY_PHONE');
@@ -88,22 +90,40 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
   };
 
   const requestMedia = async () => {
+    if (perms.media === 'granted') {
+       playTTS(t('permission_enabled'));
+       return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
       stream.getTracks().forEach(t => t.stop());
       setPerms(p => ({ ...p, media: 'granted' }));
-    } catch (e) { setPerms(p => ({ ...p, media: 'denied' })); }
+    } catch (e) { 
+      setPerms(p => ({ ...p, media: 'denied' })); 
+      playTTS("无法获取权限，请在浏览器设置中开启。");
+    }
   };
 
   const requestLocation = () => {
+    if (perms.location === 'granted') {
+       playTTS(t('permission_enabled'));
+       return;
+    }
     navigator.geolocation.getCurrentPosition(
       () => setPerms(p => ({ ...p, location: 'granted' })),
-      () => setPerms(p => ({ ...p, location: 'denied' })),
+      () => {
+        setPerms(p => ({ ...p, location: 'denied' }));
+        playTTS("定位失败，请检查GPS开关。");
+      },
       { enableHighAccuracy: true, timeout: 5000 }
     );
   };
 
   const requestMotion = async () => {
+    if (perms.motion === 'granted') {
+       playTTS(t('permission_enabled'));
+       return;
+    }
     if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
       try {
         const res = await (DeviceMotionEvent as any).requestPermission();
@@ -117,11 +137,17 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
   const allGranted = perms.media === 'granted' && perms.location === 'granted' && perms.motion === 'granted';
 
   useEffect(() => {
-    if (allGranted && !hasCompletedSetup) {
+    if (allGranted && !hasCompletedSetup && !forceShowSetup) {
       localStorage.setItem(GUARD_STORAGE_KEY, 'true');
       setHasCompletedSetup(true);
     }
-  }, [allGranted, hasCompletedSetup]);
+  }, [allGranted, hasCompletedSetup, forceShowSetup]);
+
+  const handleResetPermissions = () => {
+    setForceShowSetup(true);
+    setHasCompletedSetup(false);
+    localStorage.removeItem(GUARD_STORAGE_KEY);
+  };
 
   return (
     <div className="p-4 flex flex-col h-full space-y-4 overflow-y-auto pb-24 relative">
@@ -137,10 +163,21 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
         </div>
       )}
 
-      {!hasCompletedSetup && !allGranted && (
+      {/* Permission Section: Shown if setup incomplete OR forced */}
+      {(!hasCompletedSetup || forceShowSetup) && (
         <section className="bg-slate-800 text-white rounded-[30px] p-5 shadow-xl border-2 border-blue-500/30">
           <div className="flex flex-col gap-4">
-            <h3 className="text-xl font-bold flex items-center gap-2">🛡️ {t('start_guard')}</h3>
+            <div className="flex justify-between items-start">
+              <h3 className="text-xl font-bold flex items-center gap-2">🛡️ {t('start_guard')}</h3>
+              {forceShowSetup && (
+                <button 
+                  onClick={() => setForceShowSetup(false)} 
+                  className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300"
+                >
+                  {t('close')}
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-3">
               <PermissionItem label={t('motion_sensor')} status={perms.motion} onClick={requestMotion} />
               <PermissionItem label={t('media_permission')} status={perms.media} onClick={requestMedia} />
@@ -150,13 +187,16 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
         </section>
       )}
 
-      {hasCompletedSetup && (
-        <div className="bg-white border-2 border-emerald-100 rounded-[30px] p-4 flex items-center gap-4 shadow-sm">
-          <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xl animate-pulse">🛡️</div>
-          <div className="flex-1">
-            <p className="text-emerald-800 font-black text-lg leading-tight">{t('monitoring_on')}</p>
-            <p className="text-emerald-600 text-[10px] font-bold uppercase tracking-wider">{t('system_running')}</p>
+      {hasCompletedSetup && !forceShowSetup && (
+        <div className="bg-white border-2 border-emerald-100 rounded-[30px] p-4 flex items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-center gap-4">
+             <div className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xl animate-pulse">🛡️</div>
+             <div>
+               <p className="text-emerald-800 font-black text-lg leading-tight">{t('monitoring_on')}</p>
+               <p className="text-emerald-600 text-[10px] font-bold uppercase tracking-wider">{t('system_running')}</p>
+             </div>
           </div>
+          <button onClick={handleResetPermissions} className="text-emerald-300 text-2xl px-2">⚙️</button>
         </div>
       )}
 
@@ -274,13 +314,22 @@ const Home: React.FC<HomeProps> = ({ setRoute, handleGoWeatherNews, reminders, h
 const PermissionItem = ({ label, status, onClick }: { label: string, status: PermissionStatus, onClick: () => void }) => {
   const { t } = useLanguage();
   const isGranted = status === 'granted';
+  // Removed 'disabled={isGranted}' to allow user to re-check or feel the responsiveness
   return (
     <div className="flex items-center justify-between bg-white/5 p-4 rounded-2xl border border-white/10">
       <span className="text-lg font-bold">{label}</span>
-      <button onClick={onClick} disabled={isGranted} className={`px-5 py-2 rounded-full font-bold text-sm ${isGranted ? 'bg-green-500' : 'bg-blue-600 active:scale-95'}`}>{isGranted ? t('permission_enabled') : t('permission_click_enable')}</button>
+      <button 
+        onClick={onClick} 
+        className={`px-5 py-2 rounded-full font-bold text-sm transition-all active:scale-95 ${
+          isGranted 
+            ? 'bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.4)]' 
+            : 'bg-blue-600 text-white shadow-lg'
+        }`}
+      >
+        {isGranted ? t('permission_enabled') : t('permission_click_enable')}
+      </button>
     </div>
   );
 };
 
 export default Home;
-    

@@ -51,6 +51,7 @@ export interface MedRecord {
   time: string;
   timestamp: number;
   evidenceImage?: string; 
+  videoData?: string; // Base64 video string
   status: 'pending' | 'verified' | 'skipped';
   isVideoUploaded?: boolean;
 }
