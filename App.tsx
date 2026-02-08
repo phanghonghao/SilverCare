@@ -42,7 +42,7 @@ const App: React.FC = () => {
   
   // 语音监控 debug 状态
   const [rawText, setRawText] = useState<string>('等待唤醒...');
-  const [parsedIntent, setParsedIntent] = useState<string>('无');
+  const [parsedIntent, setParsedIntent] = useState<string>('就绪');
   const [isIntentActive, setIsIntentActive] = useState(false);
 
   const [quotaHit, setQuotaHit] = useState(false);
@@ -56,6 +56,8 @@ const App: React.FC = () => {
   const [alarms, setAlarms] = useState<Alarm[]>([
     { id: 'high-p', time: '12:30', label: '吃药时间', enabled: true, isHighPriority: true }
   ]);
+
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     if (userRole !== UserRole.ELDERLY) return;
@@ -108,7 +110,7 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // 改进的语音监听逻辑
+  // 强化语音控制与实时监控
   useEffect(() => {
     if (userRole !== UserRole.ELDERLY || !hasApiKey || currentRoute === AppRoute.LIVE_CALL) {
       setIsListeningForVoice(false);
@@ -122,104 +124,94 @@ const App: React.FC = () => {
     recognition.continuous = true;
     recognition.lang = 'zh-CN';
     recognition.interimResults = true;
+    recognitionRef.current = recognition;
     
     recognition.onresult = (event: any) => {
       let interimTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          const finalResult = event.results[i][0].transcript;
-          handleVoiceCommand(finalResult);
+          handleVoiceCommand(event.results[i][0].transcript);
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
 
-      // 关键：实时更新 RAW TEXT 显示
       if (interimTranscript) {
         setRawText(interimTranscript); 
         setIsListeningForVoice(true);
-        // 动态音量波纹
-        setRmsVolume(isWaitingForCommand ? 90 : 35);
+        setRmsVolume(isWaitingForCommand ? 100 : 40);
 
-        // VAD (语音活动检测) 自动截断
         if (vadTimerRef.current) window.clearTimeout(vadTimerRef.current);
         vadTimerRef.current = window.setTimeout(() => {
           if (interimTranscript.trim().length > 0) {
             handleVoiceCommand(interimTranscript);
-            recognition.stop(); 
+            // Don't stop recognition here, let handleVoiceCommand manage it if needed
           }
-        }, isWaitingForCommand ? 1000 : 1500); // 唤醒后指令检测更灵敏
+        }, isWaitingForCommand ? 800 : 1800); 
       }
     };
 
     const handleVoiceCommand = async (text: string) => {
       if (quotaHit || !text.trim()) return;
       
-      setRawText(text); // 确保最后一次完整结果显示
+      setRawText(text);
       setIsIntentActive(false);
 
       const hasWakeWord = matchWakeWord(text);
 
-      // 场景 A: 唤醒并直达指令 (例如 "小玲你好，开启视讯")
-      if (hasWakeWord && INTENT_KEYWORDS.CALL.some(k => text.includes(k))) {
-        setParsedIntent("开启视讯陪伴 (直接指令)");
-        setIsIntentActive(true);
-        setInitialPrompt(text);
-        setRoute(AppRoute.LIVE_CALL);
-        setIsWaitingForCommand(false);
-        return;
+      // 场景 A: 唤醒并直通 (e.g. "小玲你好，我想看看新闻")
+      if (hasWakeWord && (INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) || INTENT_KEYWORDS.WEATHER.some(k => text.includes(k)))) {
+         const type = INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) ? 'news' : 'weather';
+         setParsedIntent(`直达 -> ${type === 'news' ? '新闻' : '天气'}`);
+         setIsIntentActive(true);
+         setWeatherNewsType(type);
+         setRoute(AppRoute.WEATHER_NEWS);
+         setIsWaitingForCommand(false);
+         return;
       }
 
-      // 场景 B: 唤醒后的后续指令监听 (状态机：isWaitingForCommand 为 true)
+      // 场景 B: 唤醒后的连读指令 (正在等待命令)
       if (isWaitingForCommand) {
         setIsWaitingForCommand(false);
-        setParsedIntent("正在解析 AI 意图...");
+        setParsedIntent("正在解析...");
         
         const intent = await determineUserIntent(text);
         
         if (intent.action === 'NAVIGATE' && intent.route) {
-          setParsedIntent(`跳转到 -> ${intent.route}`);
+          setParsedIntent(`操作 -> ${intent.route}`);
           setIsIntentActive(true);
           if (intent.data?.type) setWeatherNewsType(intent.data.type);
           setRoute(intent.route as AppRoute);
-          if (intent.route === AppRoute.LIVE_CALL) setInitialPrompt(text);
         } else if (intent.action === 'REPLY' && intent.reply) {
-          setParsedIntent("智能回复");
+          setParsedIntent("智能回应");
           setIsIntentActive(true);
           await playTTS(intent.reply);
         } else {
-          setParsedIntent("意图不明确");
-          await playTTS("好的，已收到您的吩咐。");
+          setParsedIntent("无匹配意图");
+          await playTTS("刚才没听明白，您再说一遍？");
         }
         return;
       }
 
-      // 场景 C: 纯唤醒 (例如 只说了 "小玲你好")
+      // 场景 C: 基础唤醒
       if (hasWakeWord) {
-        setParsedIntent("唤醒成功: 倾听中...");
+        setParsedIntent("已唤醒: 倾听指令...");
         setIsIntentActive(true);
-        recognition.stop(); // 停止当前段，准备进入回复和下一段监听
-        setIsListeningForVoice(false); 
+        // 先临时停止监听，播放回复后再恢复，避免录入自己的声音
+        recognition.stop();
+        setIsListeningForVoice(false);
         
-        await playTTS("您好，有什么吩咐吗？");
+        await playTTS("哎，我在呢，您想做什么？");
         
-        // 标记为正在等待具体指令
         setIsWaitingForCommand(true);
-        setRawText("请下达指令...");
+        setRawText("请说出您的指令...");
         return;
-      }
-
-      // 场景 D: 非唤醒状态下的特定关键词识别 (容错)
-      if (INTENT_KEYWORDS.CALL.some(k => text.includes(k))) {
-        setParsedIntent("关键词匹配: 视讯");
-        setIsIntentActive(true);
-        setRoute(AppRoute.LIVE_CALL);
       }
     };
 
     recognition.onend = () => { 
       setIsListeningForVoice(false); 
-      // 循环重启监听，除非是在进行视讯通话
+      // 只要不是在视频通话，就确保持续重启
       if (currentRoute !== AppRoute.LIVE_CALL) {
         try { recognition.start(); } catch(e) {} 
       }
@@ -227,7 +219,7 @@ const App: React.FC = () => {
     
     try { recognition.start(); } catch(e) {}
     return () => { try { recognition.stop(); } catch(e) {} };
-  }, [userRole, hasApiKey, reminders, currentRoute, quotaHit, isWaitingForCommand]);
+  }, [userRole, hasApiKey, currentRoute, quotaHit, isWaitingForCommand]);
 
   const vadTimerRef = useRef<number | null>(null);
 
@@ -244,7 +236,12 @@ const App: React.FC = () => {
     checkKey();
   }, []);
 
-  const handleBack = () => setRoute(AppRoute.HOME);
+  const handleBack = () => {
+    setRoute(AppRoute.HOME);
+    setIsWaitingForCommand(false);
+    setParsedIntent("就绪");
+    setRawText("等待唤醒...");
+  };
 
   const renderView = () => {
     if (currentRoute === AppRoute.TEST) return <TestCenter onBack={handleBack} />;
@@ -282,28 +279,45 @@ const App: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen ${isWideLayout ? 'max-w-4xl' : 'max-w-md'} mx-auto bg-slate-50 shadow-2xl overflow-hidden relative pt-14`}>
-      {/* 智能语音监视器 (Voice Intelligence Monitor) */}
+      {/* 增强型语音监视器 (Voice Monitor Bar) */}
       {userRole === UserRole.ELDERLY && currentRoute !== AppRoute.LIVE_CALL && (
-        <div className="absolute top-0 left-0 right-0 z-[1000] bg-slate-900/95 backdrop-blur-xl border-b border-white/5 p-2 shadow-2xl">
-           <div className="flex flex-col gap-1 px-2">
-              <div className="flex justify-between items-center h-5">
-                 <div className="flex items-center gap-2 overflow-hidden flex-1">
-                    <div className={`w-1.5 h-1.5 rounded-full ${isListeningForVoice ? 'bg-blue-400 animate-pulse' : 'bg-slate-700'}`}></div>
-                    <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter shrink-0">RAW TEXT</span>
-                    <p className="text-[11px] font-mono text-blue-300 truncate">{rawText}</p>
+        <div className="absolute top-0 left-0 right-0 z-[2000] bg-slate-900 shadow-2xl border-b border-white/10">
+           <div className="flex items-center h-12 px-3 gap-3">
+              <div className="flex items-center gap-2 flex-1 overflow-hidden">
+                 <div className="flex flex-col">
+                    <span className="text-[7px] font-black text-blue-500 uppercase tracking-tighter leading-none mb-0.5">RAW TEXT</span>
+                    <div className="flex items-center gap-1.5 overflow-hidden">
+                       <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isListeningForVoice ? 'bg-blue-400 animate-pulse' : 'bg-slate-700'}`}></div>
+                       <p className="text-[11px] font-mono text-blue-100 truncate italic">
+                          {rawText}
+                       </p>
+                    </div>
                  </div>
-                 <div className="flex items-center gap-2 flex-1 justify-end ml-4">
-                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-black tracking-tighter uppercase shrink-0 transition-all ${isIntentActive ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>INTENT</span>
-                    <p className={`text-[11px] font-mono truncate text-right ${isIntentActive ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>{parsedIntent}</p>
+              </div>
+              
+              <div className="w-px h-6 bg-white/10 shrink-0"></div>
+
+              <div className="flex flex-col flex-1 overflow-hidden">
+                 <span className="text-[7px] font-black text-emerald-500 uppercase tracking-tighter leading-none mb-0.5">INTENT</span>
+                 <div className="flex items-center gap-1.5 overflow-hidden">
+                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${isIntentActive ? 'bg-emerald-400 animate-ping' : 'bg-slate-700'}`}></div>
+                    <p className={`text-[11px] font-mono truncate uppercase tracking-tight ${isIntentActive ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                       {parsedIntent}
+                    </p>
                  </div>
               </div>
            </div>
+           
+           {/* 加载进度条动画 - 仅在等待指令时 */}
+           {isWaitingForCommand && (
+             <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 animate-[pulse_1s_infinite]"></div>
+           )}
         </div>
       )}
 
       <div className="absolute top-16 right-4 z-[600] flex items-center gap-1.5">
          <div className={`w-2 h-2 rounded-full ${quotaHit ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></div>
-         <span className="text-[10px] font-bold text-slate-400">{quotaHit ? '小玲休息中' : isPreheating ? '正在预热数据' : '系统就绪'}</span>
+         <span className="text-[10px] font-bold text-slate-400">{quotaHit ? '小玲休息中' : isPreheating ? '正在预热数据' : '语音就绪'}</span>
       </div>
 
       {isEmergency && <EmergencyAlert onCancel={() => setIsEmergency(false)} />}
