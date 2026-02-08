@@ -108,14 +108,16 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // 核心语音控制与监控逻辑
+  // 改进的语音监听逻辑
   useEffect(() => {
     if (userRole !== UserRole.ELDERLY || !hasApiKey || currentRoute === AppRoute.LIVE_CALL) {
       setIsListeningForVoice(false);
       return;
     }
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitRecognition;
     if (!SpeechRecognition) return;
+
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.lang = 'zh-CN';
@@ -125,88 +127,91 @@ const App: React.FC = () => {
       let interimTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          handleVoiceCommand(event.results[i][0].transcript);
+          const finalResult = event.results[i][0].transcript;
+          handleVoiceCommand(finalResult);
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
+
+      // 关键：实时更新 RAW TEXT 显示
       if (interimTranscript) {
-        setRawText(interimTranscript); // 实时显示在顶栏
+        setRawText(interimTranscript); 
         setIsListeningForVoice(true);
-        setRmsVolume(isWaitingForCommand ? 80 : 40); 
+        // 动态音量波纹
+        setRmsVolume(isWaitingForCommand ? 90 : 35);
+
+        // VAD (语音活动检测) 自动截断
         if (vadTimerRef.current) window.clearTimeout(vadTimerRef.current);
         vadTimerRef.current = window.setTimeout(() => {
           if (interimTranscript.trim().length > 0) {
             handleVoiceCommand(interimTranscript);
             recognition.stop(); 
           }
-        }, 1200);
+        }, isWaitingForCommand ? 1000 : 1500); // 唤醒后指令检测更灵敏
       }
     };
 
     const handleVoiceCommand = async (text: string) => {
-      if (quotaHit) return;
-      setRawText(text);
+      if (quotaHit || !text.trim()) return;
+      
+      setRawText(text); // 确保最后一次完整结果显示
       setIsIntentActive(false);
 
       const hasWakeWord = matchWakeWord(text);
 
-      // 1. 直达模式：小玲你好 + 动作关键词
+      // 场景 A: 唤醒并直达指令 (例如 "小玲你好，开启视讯")
       if (hasWakeWord && INTENT_KEYWORDS.CALL.some(k => text.includes(k))) {
-        setParsedIntent("开启视讯陪伴 (直达)");
+        setParsedIntent("开启视讯陪伴 (直接指令)");
         setIsIntentActive(true);
         setInitialPrompt(text);
         setRoute(AppRoute.LIVE_CALL);
         setIsWaitingForCommand(false);
         return;
       }
-      
-      if (hasWakeWord && INTENT_KEYWORDS.WEATHER.some(k => text.includes(k))) {
-        setParsedIntent("跳转 -> 天气 (直达)");
-        setIsIntentActive(true);
-        setWeatherNewsType('weather');
-        setRoute(AppRoute.WEATHER_NEWS);
-        setIsWaitingForCommand(false);
-        return;
-      }
 
-      // 2. 二次指令确认模式
+      // 场景 B: 唤醒后的后续指令监听 (状态机：isWaitingForCommand 为 true)
       if (isWaitingForCommand) {
         setIsWaitingForCommand(false);
-        setParsedIntent("AI 解析意图中...");
+        setParsedIntent("正在解析 AI 意图...");
+        
         const intent = await determineUserIntent(text);
         
         if (intent.action === 'NAVIGATE' && intent.route) {
-          setParsedIntent(`跳转 -> ${intent.route}`);
+          setParsedIntent(`跳转到 -> ${intent.route}`);
           setIsIntentActive(true);
           if (intent.data?.type) setWeatherNewsType(intent.data.type);
           setRoute(intent.route as AppRoute);
           if (intent.route === AppRoute.LIVE_CALL) setInitialPrompt(text);
         } else if (intent.action === 'REPLY' && intent.reply) {
-          setParsedIntent("执行回复动作");
+          setParsedIntent("智能回复");
           setIsIntentActive(true);
           await playTTS(intent.reply);
         } else {
-          setParsedIntent("意图不明");
-          await playTTS("好的，已收到。");
+          setParsedIntent("意图不明确");
+          await playTTS("好的，已收到您的吩咐。");
         }
         return;
       }
 
-      // 3. 基础唤醒模式
+      // 场景 C: 纯唤醒 (例如 只说了 "小玲你好")
       if (hasWakeWord) {
-        setParsedIntent("唤醒成功，倾听中...");
+        setParsedIntent("唤醒成功: 倾听中...");
         setIsIntentActive(true);
-        recognition.stop(); 
-        setIsListeningForVoice(true); 
+        recognition.stop(); // 停止当前段，准备进入回复和下一段监听
+        setIsListeningForVoice(false); 
+        
         await playTTS("您好，有什么吩咐吗？");
+        
+        // 标记为正在等待具体指令
         setIsWaitingForCommand(true);
+        setRawText("请下达指令...");
         return;
       }
 
-      // 4. 非唤醒状态下的关键词兜底 (仅针对核心功能)
+      // 场景 D: 非唤醒状态下的特定关键词识别 (容错)
       if (INTENT_KEYWORDS.CALL.some(k => text.includes(k))) {
-        setParsedIntent("匹配关键词: 视讯");
+        setParsedIntent("关键词匹配: 视讯");
         setIsIntentActive(true);
         setRoute(AppRoute.LIVE_CALL);
       }
@@ -214,7 +219,10 @@ const App: React.FC = () => {
 
     recognition.onend = () => { 
       setIsListeningForVoice(false); 
-      try { recognition.start(); } catch(e) {} 
+      // 循环重启监听，除非是在进行视讯通话
+      if (currentRoute !== AppRoute.LIVE_CALL) {
+        try { recognition.start(); } catch(e) {} 
+      }
     };
     
     try { recognition.start(); } catch(e) {}
@@ -237,39 +245,6 @@ const App: React.FC = () => {
   }, []);
 
   const handleBack = () => setRoute(AppRoute.HOME);
-  
-  const handleAddReminder = (time: string, title: string, type: Reminder['type']) => {
-    setReminders(prev => {
-      const newReminder: Reminder = {
-        id: Date.now().toString(),
-        time,
-        title,
-        type,
-        completed: false
-      };
-      // 添加并自动按时间排序
-      const newList = [...prev, newReminder];
-      return newList.sort((a, b) => a.time.localeCompare(b.time));
-    });
-  };
-
-  const handleDeleteReminder = (id: string) => {
-    setReminders(prev => prev.filter(r => r.id !== id));
-  };
-
-  const handleToggleReminder = (id: string) => {
-    const reminder = reminders.find(r => r.id === id);
-    if (!reminder) return;
-
-    // 关键修改：如果是药品且未完成，强制进入录像模式
-    if (reminder.type === 'med' && !reminder.completed) {
-      setMedToCapture(reminder.title);
-      setRoute(AppRoute.MED_CAPTURE);
-    } else {
-      // 其他类型或取消完成，正常切换
-      setReminders(prev => prev.map(r => r.id === id ? {...r, completed: !r.completed} : r));
-    }
-  };
 
   const renderView = () => {
     if (currentRoute === AppRoute.TEST) return <TestCenter onBack={handleBack} />;
@@ -281,13 +256,7 @@ const App: React.FC = () => {
       case AppRoute.CHAT: return <Chat onBack={handleBack} />;
       case AppRoute.VISION: return <VisionAssistant voiceSwitchTrigger={cameraSwitchTrigger} onBack={handleBack} />;
       case AppRoute.FAMILY: return <FamilyWall onBack={handleBack} />;
-      case AppRoute.REMINDERS: return <Reminders 
-        reminders={reminders} 
-        onBack={handleBack} 
-        onToggle={handleToggleReminder}
-        onAdd={handleAddReminder}
-        onDelete={handleDeleteReminder}
-      />;
+      case AppRoute.REMINDERS: return <Reminders reminders={reminders} onBack={handleBack} onToggle={(id) => setReminders(p => p.map(r => r.id === id ? {...r, completed: !r.completed} : r))} onAdd={(t,l,ty) => {}} onDelete={(id) => {}} />;
       case AppRoute.ALARM: return <AlarmComponent alarms={alarms} onBack={handleBack} onToggle={(id) => setAlarms(p => p.map(a => a.id === id ? {...a, enabled: !a.enabled} : a))} onDelete={(id) => setAlarms(p => p.filter(a => a.id !== id))} onAdd={(time, label) => { const newAlarms = [...alarms, { id: Date.now().toString(), time, label, enabled: true }]; setAlarms(newAlarms); DataSyncManager.pushConfig({ alarms: newAlarms }); }} />;
       case AppRoute.SAFETY: return <FallMonitor onBack={handleBack} onFallDetected={() => setIsEmergency(true)} />;
       case AppRoute.LIVE_CALL: return <LiveCall onEnd={handleBack} voiceSwitchTrigger={cameraSwitchTrigger} initialPrompt={initialPrompt} />;
@@ -312,26 +281,31 @@ const App: React.FC = () => {
   const isWideLayout = currentRoute === AppRoute.TEST;
 
   return (
-    <div className={`flex flex-col h-screen ${isWideLayout ? 'max-w-4xl' : 'max-w-md'} mx-auto bg-slate-50 shadow-2xl overflow-hidden relative pt-12`}>
-      {/* 智能语音监视器 (Voice Monitor) */}
+    <div className={`flex flex-col h-screen ${isWideLayout ? 'max-w-4xl' : 'max-w-md'} mx-auto bg-slate-50 shadow-2xl overflow-hidden relative pt-14`}>
+      {/* 智能语音监视器 (Voice Intelligence Monitor) */}
       {userRole === UserRole.ELDERLY && currentRoute !== AppRoute.LIVE_CALL && (
-        <div className="absolute top-0 left-0 right-0 z-[1000] bg-slate-900/90 backdrop-blur-md text-white px-4 py-2 flex items-center justify-between border-b border-white/10 shadow-lg">
-           <div className="flex items-center gap-2 overflow-hidden flex-1">
-              <span className="bg-blue-600 text-[9px] px-1.5 py-0.5 rounded font-black tracking-tighter uppercase shrink-0">RAW</span>
-              <p className="text-xs font-mono truncate text-blue-200">{rawText}</p>
-           </div>
-           <div className="flex items-center gap-2 flex-1 justify-end ml-4">
-              <span className={`text-[9px] px-1.5 py-0.5 rounded font-black tracking-tighter uppercase shrink-0 transition-all ${isIntentActive ? 'bg-emerald-500 text-white animate-pulse' : 'bg-slate-700 text-slate-400'}`}>INTENT</span>
-              <p className={`text-xs font-mono truncate text-right ${isIntentActive ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>{parsedIntent}</p>
+        <div className="absolute top-0 left-0 right-0 z-[1000] bg-slate-900/95 backdrop-blur-xl border-b border-white/5 p-2 shadow-2xl">
+           <div className="flex flex-col gap-1 px-2">
+              <div className="flex justify-between items-center h-5">
+                 <div className="flex items-center gap-2 overflow-hidden flex-1">
+                    <div className={`w-1.5 h-1.5 rounded-full ${isListeningForVoice ? 'bg-blue-400 animate-pulse' : 'bg-slate-700'}`}></div>
+                    <span className="text-[8px] font-black text-slate-500 uppercase tracking-tighter shrink-0">RAW TEXT</span>
+                    <p className="text-[11px] font-mono text-blue-300 truncate">{rawText}</p>
+                 </div>
+                 <div className="flex items-center gap-2 flex-1 justify-end ml-4">
+                    <span className={`text-[8px] px-1.5 py-0.5 rounded font-black tracking-tighter uppercase shrink-0 transition-all ${isIntentActive ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>INTENT</span>
+                    <p className={`text-[11px] font-mono truncate text-right ${isIntentActive ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>{parsedIntent}</p>
+                 </div>
+              </div>
            </div>
         </div>
       )}
 
-      <div className="absolute top-14 right-4 z-[600] flex items-center gap-1.5">
+      <div className="absolute top-16 right-4 z-[600] flex items-center gap-1.5">
          <div className={`w-2 h-2 rounded-full ${quotaHit ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></div>
          <span className="text-[10px] font-bold text-slate-400">{quotaHit ? '小玲休息中' : isPreheating ? '正在预热数据' : '系统就绪'}</span>
       </div>
-      
+
       {isEmergency && <EmergencyAlert onCancel={() => setIsEmergency(false)} />}
       {userRole === UserRole.ELDERLY && <VoiceRipple volume={rmsVolume} isActive={isListeningForVoice || isWaitingForCommand} />}
       
