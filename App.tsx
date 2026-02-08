@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { AppRoute, Reminder, Alarm, UserRole, SyncData, HealthLog, INTENT_KEYWORDS, RemoteConfig } from './types';
+import { AppRoute, Reminder, Alarm, UserRole, SyncData, HealthLog, INTENT_KEYWORDS, RemoteConfig, MedRecord } from './types';
 import { STORAGE_KEY_NAME, getActiveApiKey, addSafetyLog, matchWakeWord, playTTS, fetchWeatherOrNews, checkQuotaStatus, getCachedData, DataSyncManager, determineUserIntent } from './services/geminiService';
 import Home from './components/Home';
 import Chat from './components/Chat';
@@ -117,6 +116,8 @@ const App: React.FC = () => {
       return;
     }
 
+    let isMounted = true;
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitRecognition;
     if (!SpeechRecognition) return;
 
@@ -145,7 +146,6 @@ const App: React.FC = () => {
         vadTimerRef.current = window.setTimeout(() => {
           if (interimTranscript.trim().length > 0) {
             handleVoiceCommand(interimTranscript);
-            // Don't stop recognition here, let handleVoiceCommand manage it if needed
           }
         }, isWaitingForCommand ? 800 : 1800); 
       }
@@ -159,7 +159,6 @@ const App: React.FC = () => {
 
       const hasWakeWord = matchWakeWord(text);
 
-      // 场景 A: 唤醒并直通 (e.g. "小玲你好，我想看看新闻")
       if (hasWakeWord && (INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) || INTENT_KEYWORDS.WEATHER.some(k => text.includes(k)))) {
          const type = INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) ? 'news' : 'weather';
          setParsedIntent(`直达 -> ${type === 'news' ? '新闻' : '天气'}`);
@@ -170,7 +169,6 @@ const App: React.FC = () => {
          return;
       }
 
-      // 场景 B: 唤醒后的连读指令 (正在等待命令)
       if (isWaitingForCommand) {
         setIsWaitingForCommand(false);
         setParsedIntent("正在解析...");
@@ -193,16 +191,12 @@ const App: React.FC = () => {
         return;
       }
 
-      // 场景 C: 基础唤醒
       if (hasWakeWord) {
         setParsedIntent("已唤醒: 倾听指令...");
         setIsIntentActive(true);
-        // 先临时停止监听，播放回复后再恢复，避免录入自己的声音
         recognition.stop();
         setIsListeningForVoice(false);
-        
         await playTTS("哎，我在呢，您想做什么？");
-        
         setIsWaitingForCommand(true);
         setRawText("请说出您的指令...");
         return;
@@ -211,14 +205,16 @@ const App: React.FC = () => {
 
     recognition.onend = () => { 
       setIsListeningForVoice(false); 
-      // 只要不是在视频通话，就确保持续重启
-      if (currentRoute !== AppRoute.LIVE_CALL) {
+      if (isMounted && currentRoute !== AppRoute.LIVE_CALL) {
         try { recognition.start(); } catch(e) {} 
       }
     };
     
     try { recognition.start(); } catch(e) {}
-    return () => { try { recognition.stop(); } catch(e) {} };
+    return () => { 
+      isMounted = false;
+      try { recognition.stop(); } catch(e) {} 
+    };
   }, [userRole, hasApiKey, currentRoute, quotaHit, isWaitingForCommand]);
 
   const vadTimerRef = useRef<number | null>(null);
@@ -253,12 +249,46 @@ const App: React.FC = () => {
       case AppRoute.CHAT: return <Chat onBack={handleBack} />;
       case AppRoute.VISION: return <VisionAssistant voiceSwitchTrigger={cameraSwitchTrigger} onBack={handleBack} />;
       case AppRoute.FAMILY: return <FamilyWall onBack={handleBack} />;
-      case AppRoute.REMINDERS: return <Reminders reminders={reminders} onBack={handleBack} onToggle={(id) => setReminders(p => p.map(r => r.id === id ? {...r, completed: !r.completed} : r))} onAdd={(t,l,ty) => {}} onDelete={(id) => {}} />;
+      case AppRoute.REMINDERS: return <Reminders 
+        reminders={reminders} 
+        onBack={handleBack} 
+        onToggle={(id) => {
+          const r = reminders.find(item => item.id === id);
+          if (r && !r.completed) {
+            // 跳转到录制页面
+            setMedToCapture(r.title);
+            setRoute(AppRoute.MED_CAPTURE);
+          } else {
+            // 取消完成
+            setReminders(p => p.map(item => item.id === id ? {...item, completed: !item.completed} : item));
+          }
+        }} 
+        onAdd={(time, title, type) => setReminders(prev => [...prev, { id: Date.now().toString(), time, title, type, completed: false }])} 
+        onDelete={(id) => setReminders(prev => prev.filter(r => r.id !== id))} 
+      />;
       case AppRoute.ALARM: return <AlarmComponent alarms={alarms} onBack={handleBack} onToggle={(id) => setAlarms(p => p.map(a => a.id === id ? {...a, enabled: !a.enabled} : a))} onDelete={(id) => setAlarms(p => p.filter(a => a.id !== id))} onAdd={(time, label) => { const newAlarms = [...alarms, { id: Date.now().toString(), time, label, enabled: true }]; setAlarms(newAlarms); DataSyncManager.pushConfig({ alarms: newAlarms }); }} />;
       case AppRoute.SAFETY: return <FallMonitor onBack={handleBack} onFallDetected={() => setIsEmergency(true)} />;
       case AppRoute.LIVE_CALL: return <LiveCall onEnd={handleBack} voiceSwitchTrigger={cameraSwitchTrigger} initialPrompt={initialPrompt} />;
       case AppRoute.WEATHER_NEWS: return <WeatherNewsView type={weatherNewsType} onBack={handleBack} />;
-      case AppRoute.MED_CAPTURE: return medToCapture ? <MedicationCapture medName={medToCapture} isForced={isForcedMedMode} onComplete={() => { setReminders(prev => prev.map(r => r.title === medToCapture ? {...r, completed: true} : r)); setHasMedMedal(true); setIsForcedMedMode(false); setMedToCapture(null); setRoute(AppRoute.HOME); }} onCancel={() => { if (isForcedMedMode) { playTTS("请先吃药。"); return; } setMedToCapture(null); setRoute(AppRoute.HOME); }} /> : <Home setRoute={setRoute} handleGoWeatherNews={(t) => { setWeatherNewsType(t); setRoute(AppRoute.WEATHER_NEWS); }} reminders={reminders} />;
+      
+      case AppRoute.MED_CAPTURE: return medToCapture ? <MedicationCapture 
+        medName={medToCapture} 
+        isForced={isForcedMedMode} 
+        onComplete={(record) => { 
+          setReminders(prev => prev.map(r => r.title === medToCapture ? {...r, completed: true} : r)); 
+          setHasMedMedal(true); 
+          setIsForcedMedMode(false); 
+          setMedToCapture(null); 
+          // 录制完成后，如果不是强制模式（闹钟），则返回列表页查看打勾状态
+          setRoute(isForcedMedMode ? AppRoute.HOME : AppRoute.REMINDERS); 
+        }} 
+        onCancel={() => { 
+          if (isForcedMedMode) { playTTS("请先吃药。"); return; } 
+          setMedToCapture(null); 
+          setRoute(AppRoute.REMINDERS); 
+        }} 
+      /> : <Home setRoute={setRoute} handleGoWeatherNews={(t) => { setWeatherNewsType(t); setRoute(AppRoute.WEATHER_NEWS); }} reminders={reminders} />;
+      
       default: return <Home setRoute={setRoute} handleGoWeatherNews={(t) => { setWeatherNewsType(t); setRoute(AppRoute.WEATHER_NEWS); }} reminders={reminders} hasMedal={hasMedMedal} />;
     }
   };
@@ -279,7 +309,6 @@ const App: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen ${isWideLayout ? 'max-w-4xl' : 'max-w-md'} mx-auto bg-slate-50 shadow-2xl overflow-hidden relative pt-14`}>
-      {/* 增强型语音监视器 (Voice Monitor Bar) */}
       {userRole === UserRole.ELDERLY && currentRoute !== AppRoute.LIVE_CALL && (
         <div className="absolute top-0 left-0 right-0 z-[2000] bg-slate-900 shadow-2xl border-b border-white/10">
            <div className="flex items-center h-12 px-3 gap-3">
@@ -294,9 +323,7 @@ const App: React.FC = () => {
                     </div>
                  </div>
               </div>
-              
               <div className="w-px h-6 bg-white/10 shrink-0"></div>
-
               <div className="flex flex-col flex-1 overflow-hidden">
                  <span className="text-[7px] font-black text-emerald-500 uppercase tracking-tighter leading-none mb-0.5">INTENT</span>
                  <div className="flex items-center gap-1.5 overflow-hidden">
@@ -307,8 +334,6 @@ const App: React.FC = () => {
                  </div>
               </div>
            </div>
-           
-           {/* 加载进度条动画 - 仅在等待指令时 */}
            {isWaitingForCommand && (
              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 animate-[pulse_1s_infinite]"></div>
            )}
