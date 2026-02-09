@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decode, decodeAudioData } from "../utils/audioUtils";
-import { SyncData, HealthLog, WAKE_WORD_REGEX, RemoteConfig, Alarm, Language } from "../types";
+import { SyncData, HealthLog, WAKE_WORD_REGEX, RemoteConfig, Alarm, Language, AppRoute } from "../types";
 
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
@@ -21,69 +21,88 @@ const getCurrentLanguage = (): Language => {
   return (localStorage.getItem('SILVERCARE_LANGUAGE') as Language) || 'zh-CN';
 };
 
-// --- LanguageInterceptor: 多语言感知核心 ---
+// --- LanguageInterceptor ---
 class LanguageInterceptor {
   static interceptQuery(query: string, lang: Language): string {
-    const regionalContext = query.includes("巴生") || query.includes("Klang") ? "Port Klang, Malaysia" : "";
-    
+    const isKlang = query.includes("巴生") || query.includes("Klang");
+    const loc = isKlang ? "Port Klang, Malaysia" : "local area";
     if (lang === 'en') {
-      return `[Strict Language: English] Search specifically for English content and sources. Location: ${regionalContext || 'local area'}. Query: ${query}. Ensure the final output is entirely in simple English.`;
-    } else if (lang === 'zh-TW') {
-      return `[语言：繁体中文] 搜索当地资讯。位置：${regionalContext || '当地'}。内容：${query}。请确保输出结果为繁体中文。`;
+      return `[System Language: English] Please search for latest news in ${loc}. STRATEGY: Prioritize English sources like 'The Star', 'CNA'. Output English.`;
     }
-    return `[语言：简体中文] 搜索当地资讯。位置：${regionalContext || '当地'}。内容：${query}。`;
+    return `[系统语言：${lang === 'zh-TW' ? '繁体中文' : '简体中文'}] 搜索${loc}的本地资讯。总结为适合老人听的口语。`;
   }
 
   static getSystemInstruction(lang: Language): string {
     if (lang === 'en') {
-      return "You are Xiao Ling, a warm AI assistant for the elderly. STIPULATION: You MUST respond in English. If you find information in other languages, translate it to simple, friendly English. Keep it concise.";
+      return "You are Xiao Ling, a warm AI companion. You MUST respond in clear English. Keep instructions simple for elderly users.";
     }
-    return "你是贴心助手小玲。回复必须使用当前界面语言（简体/繁体中文）。将检索到的内容总结为适合老年人听的口语化文字。严禁中英混杂。";
-  }
-
-  static getSearchingStatus(type: 'weather' | 'news', lang: Language): string {
-    if (lang === 'en') return `Searching ${type} in English...`;
-    if (lang === 'zh-TW') return `正在以繁體中文搜尋${type === 'news' ? '新聞' : '天氣'}...`;
-    return `正在查询${type === 'news' ? '新闻' : '天气'}...`;
+    return "你是贴心助手小玲。回复必须使用当前界面语言。总结为适合老年人的口语化文字，严禁中英混杂。";
   }
 }
 
-// --- SearchManager: 联网内容引擎 ---
+// --- IntentEngine: 自然语言意图识别 ---
+export class IntentEngine {
+  static async determine(text: string, currentLang: Language) {
+    try {
+      const ai = getAI();
+      const prompt = `
+        User input: "${text}"
+        Current Language: ${currentLang}
+        Valid App Routes: home, chat, reminders, vision, family, alarm, safety, live_call, weather_news
+        
+        Tasks:
+        1. Classify the intent into one of the routes.
+        2. If user mentions "news" or "weather", set data.type accordingly.
+        3. If user mentions "alarm" or "time", try to extract HH:mm.
+        4. If it's just general conversation, use action "REPLY".
+        
+        JSON Schema:
+        {
+          "action": "NAVIGATE" | "REPLY" | "ALARM_ADD",
+          "route": "AppRoute value",
+          "data": { "type": "weather" | "news", "time": "HH:mm", "label": "string" },
+          "reply": "Short, warm confirmation in ${currentLang}"
+        }
+      `;
+      
+      const response = await ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      
+      return JSON.parse(response.text || '{}');
+    } catch (e) {
+      return { action: "REPLY", reply: currentLang === 'en' ? "Pardon?" : "没听明白。" };
+    }
+  }
+}
+
+export const determineUserIntent = async (text: string) => {
+  return await IntentEngine.determine(text, getCurrentLanguage());
+};
+
+// --- SearchManager ---
 export class SearchManager {
   static async fetch(type: 'weather' | 'news', lat: number, lng: number) {
     try {
       const lang = getCurrentLanguage();
       const ai = getAI();
-      const locInfo = (lat !== 0) ? `Location(${lat.toFixed(2)}, ${lng.toFixed(2)})` : "the current local area";
-      
-      let prompt = type === 'weather' 
-        ? `Describe current weather and temperature at ${locInfo}. Max 20 words.` 
-        : `Summarize 2 top news stories happening at ${locInfo}.`;
-      
-      // 执行语言拦截与重写
+      let prompt = type === 'weather' ? `Current weather.` : `Top headlines.`;
       const interceptedPrompt = LanguageInterceptor.interceptQuery(prompt, lang);
-
       const response = await ai.models.generateContent({
         model: TEXT_MODEL,
         contents: interceptedPrompt,
-        config: { 
-          tools: [{ googleSearch: {} }], 
-          systemInstruction: LanguageInterceptor.getSystemInstruction(lang)
-        }
+        config: { tools: [{ googleSearch: {} }], systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
       });
-      
-      isQuotaExhaustedGlobal = false;
-      const result = { 
-        text: response.text || (lang === 'en' ? "Information unavailable." : "暂时查不到信息。"), 
+      return { 
+        text: response.text || "...", 
         groundingChunks: response.candidates?.[0]?.groundingMetadata?.groundingChunks || [],
-        statusMsg: LanguageInterceptor.getSearchingStatus(type, lang)
+        statusMsg: lang === 'en' ? "Searching in English..." : "正在查询..."
       };
-      setCachedData(type, result);
-      return result;
     } catch (error: any) {
       if (error.message?.includes('429')) isQuotaExhaustedGlobal = true;
-      const lang = getCurrentLanguage();
-      return { text: lang === 'en' ? "Search failed." : "搜索失败。", groundingChunks: [], statusMsg: "" };
+      return { text: "Error", groundingChunks: [], statusMsg: "" };
     }
   }
 }
@@ -96,29 +115,20 @@ export class DataSyncManager {
     localStorage.setItem(CLOUD_SYNC_KEY, btoa(JSON.stringify(updated)));
     window.dispatchEvent(new Event('storage'));
   }
-
   static async pushConfig(config: Partial<RemoteConfig>) {
     const current = this.getRemoteConfig();
     const updated = { ...current, ...config };
     localStorage.setItem(REMOTE_CONFIG_KEY, JSON.stringify(updated));
     window.dispatchEvent(new Event('storage'));
   }
-
   static getLatestSyncData(): SyncData {
     const raw = localStorage.getItem(CLOUD_SYNC_KEY);
-    return raw ? JSON.parse(atob(raw)) : {
-      user_status: 'unknown',
-      step_count: 0,
-      last_heartbeat: 0,
-      is_falling: false
-    };
+    return raw ? JSON.parse(atob(raw)) : { user_status: 'unknown', step_count: 0, last_heartbeat: 0, is_falling: false };
   }
-
   static getRemoteConfig(): RemoteConfig {
     const raw = localStorage.getItem(REMOTE_CONFIG_KEY);
     return raw ? JSON.parse(raw) : { alarms: [], volume: 80, target_reminder_ids: [] };
   }
-
   static subscribe(callback: () => void) {
     window.addEventListener('storage', callback);
     return () => window.removeEventListener('storage', callback);
@@ -136,16 +146,6 @@ export const getCachedData = (type: 'weather' | 'news') => {
   return null;
 };
 
-const setCachedData = (type: 'weather' | 'news', data: any) => {
-  const key = type === 'weather' ? CACHE_WEATHER_KEY : CACHE_NEWS_KEY;
-  localStorage.setItem(key, JSON.stringify({ timestamp: Date.now(), data }));
-};
-
-const simplifyContent = (text: string, limit: number = 30): string => {
-  let simplified = text.replace(/(马来西亚|中国|台湾|省|州|市|区|县|街道|路|巷)/g, '').replace(/[\uD83C-\uDBFF\uDC00-\uDFFF]+/g, '').trim();
-  return simplified.length > limit ? simplified.substring(0, limit) : simplified;
-};
-
 class TTSManager {
   private queue: string[] = [];
   private isPlaying = false;
@@ -158,33 +158,24 @@ class TTSManager {
     this.queue.push(...sentences);
     if (!this.isPlaying) this.processQueue();
   }
-
   private async processQueue() {
-    if (this.queue.length === 0) {
-      this.isPlaying = false;
-      return;
-    }
+    if (this.queue.length === 0) { this.isPlaying = false; return; }
     this.isPlaying = true;
     const sentence = this.queue.shift();
     if (sentence) await this.playSentenceWithRetry(sentence);
     this.processQueue();
   }
-
   private async playSentenceWithRetry(text: string): Promise<void> {
     try {
       const ai = getAI();
       const lang = getCurrentLanguage();
-      // 根据语言环境选择发音人：英文使用 Zephyr，中文使用 Kore
-      const voiceName = lang === 'en' ? 'Zephyr' : 'Kore';
-      
-      const prompt = `Read clearly: ${text}`;
       const response = await ai.models.generateContent({
         model: TTS_MODEL,
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: `Read: ${text}` }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           temperature: 0,
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: lang === 'en' ? 'Zephyr' : 'Kore' } } }
         }
       });
       const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -202,17 +193,11 @@ class TTSManager {
           source.start();
         });
       }
-    } catch (e: any) {
-      if (e.message?.includes('429')) isQuotaExhaustedGlobal = true;
-    }
+    } catch (e: any) {}
   }
-
   stop() {
     this.queue = [];
-    if (this.currentAudioSource) {
-      try { this.currentAudioSource.stop(); } catch (e) {}
-      this.currentAudioSource = null;
-    }
+    if (this.currentAudioSource) { try { this.currentAudioSource.stop(); } catch (e) {} this.currentAudioSource = null; }
     this.isPlaying = false;
   }
 }
@@ -222,7 +207,6 @@ export const playTTS = (text: string, immediate: boolean = true) => ttsManager.s
 export const stopTTS = () => ttsManager.stop();
 
 export const getActiveApiKey = () => localStorage.getItem(STORAGE_KEY_NAME) || process.env.API_KEY || "";
-
 const getAI = () => {
   const apiKey = getActiveApiKey();
   if (!apiKey) throw new Error("NO_API_KEY");
@@ -242,70 +226,24 @@ export const getGeminiResponse = async (prompt: string) => {
       contents: prompt,
       config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
-    isQuotaExhaustedGlobal = false;
-    return response.text || (lang === 'en' ? "Pardon?" : "没听清，再说一遍。");
-  } catch (error: any) { 
-    if (error.message?.includes('429')) isQuotaExhaustedGlobal = true;
-    return "Error"; 
-  }
+    return response.text || "...";
+  } catch (error: any) { return "Error"; }
 };
 
 export async function* getGeminiResponseStream(prompt: string) {
   try {
     const ai = getAI();
     const lang = getCurrentLanguage();
-    
     const responseStream = await ai.models.generateContentStream({
       model: TEXT_MODEL,
       contents: prompt,
-      config: { 
-        systemInstruction: LanguageInterceptor.getSystemInstruction(lang),
-        maxOutputTokens: 2000, 
-      }
+      config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
-
-    isQuotaExhaustedGlobal = false;
     for await (const chunk of responseStream) {
       if (chunk.text) yield chunk.text;
     }
-  } catch (error: any) {
-    if (error.message?.includes('429')) {
-      isQuotaExhaustedGlobal = true;
-      const lang = getCurrentLanguage();
-      yield lang === 'en' ? "I'm busy, one moment please." : "小玲现在有点忙，请稍等。";
-    } else {
-      yield "...";
-    }
-  }
+  } catch (error: any) { yield "..."; }
 }
-
-export const determineUserIntent = async (text: string) => {
-  try {
-    const ai = getAI();
-    const lang = getCurrentLanguage();
-    const prompt = `
-      User text: "${text}"
-      Current Language: ${lang}
-      Routes: home, chat, reminders, vision, family, alarm, safety, live_call, weather_news
-      Output JSON only:
-      {
-        "action": "NAVIGATE" | "REPLY" | "STAY",
-        "route": "AppRoute string",
-        "data": { "type": "weather" | "news" },
-        "reply": "Simple warm response in ${lang}"
-      }
-    `;
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
-      contents: prompt,
-      config: { responseMimeType: "application/json" }
-    });
-    return JSON.parse(response.text || '{}');
-  } catch (e) {
-    const lang = getCurrentLanguage();
-    return { action: "STAY", reply: lang === 'en' ? "Pardon?" : "没听明白。" };
-  }
-};
 
 export const matchWakeWord = (text: string): boolean => WAKE_WORD_REGEX.test(text);
 export const addSafetyLog = (log: HealthLog) => {
@@ -321,7 +259,7 @@ export const identifyPerson = async (img: string) => {
     const lang = getCurrentLanguage();
     const res = await ai.models.generateContent({ 
       model: TEXT_MODEL, 
-      contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Who is at the door?" }] },
+      contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Identify." }] },
       config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
     return res.text || "...";
@@ -331,15 +269,15 @@ export const identifyPerson = async (img: string) => {
 export const verifyMedication = async (img: string, name: string) => {
   try {
     const ai = getAI();
-    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: `Verify ${name}` }] }, config: { responseMimeType: "application/json" } });
+    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: `Verify med: ${name}` }] }, config: { responseMimeType: "application/json" } });
     return JSON.parse(res.text);
-  } catch (e) { return { verified: true, description: "OK" }; }
+  } catch (e) { return { verified: true }; }
 };
 
 export const analyzeUserRole = async (img: string) => {
   try {
     const ai = getAI();
-    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Identify role" }] }, config: { responseMimeType: "application/json" } });
+    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Role." }] }, config: { responseMimeType: "application/json" } });
     return JSON.parse(res.text);
   } catch (e) { return { role: 'elderly' }; }
 };
@@ -350,7 +288,7 @@ export const explainEverything = async (img: string) => {
     const lang = getCurrentLanguage();
     const res = await ai.models.generateContent({ 
         model: TEXT_MODEL, 
-        contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Explain this item simply." }] },
+        contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Explain." }] },
         config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
     return res.text || "...";

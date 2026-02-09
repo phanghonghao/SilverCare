@@ -90,11 +90,9 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
   }, [type, language]);
 
   const getStepText = () => {
-    if (loadingStep === 'locating') return language === 'en' ? "Finding your location..." : "正在看您在哪里...";
+    if (loadingStep === 'locating') return language === 'en' ? "Locating you..." : "正在看您在哪里...";
     if (loadingStep === 'fetching') {
-      if (language === 'en') return `Searching ${type} in English...`;
-      if (language === 'zh-TW') return `正在以繁體中文搜尋${type === 'news' ? '新聞' : '天氣'}...`;
-      return `小玲正在查询最新${type === 'news' ? '新闻' : '天气'}...`;
+      return statusMsg || (language === 'en' ? "Searching in English..." : "正在查询最新信息...");
     }
     return "";
   };
@@ -117,9 +115,16 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
         {loadingStep !== 'done' ? (
           <div className="flex-1 flex flex-col items-center justify-center space-y-6">
             <div className={`w-20 h-20 border-8 ${type === 'weather' ? 'border-yellow-400' : 'border-fuchsia-500'} border-t-transparent rounded-full animate-spin`}></div>
-            <p className="text-2xl font-black text-slate-500 animate-pulse text-center leading-relaxed">
-              {getStepText()}
-            </p>
+            <div className="text-center space-y-2">
+              <p className="text-2xl font-black text-slate-800 animate-pulse leading-relaxed">
+                {getStepText()}
+              </p>
+              {loadingStep === 'fetching' && (
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                  Language Anchor: {language.toUpperCase()}
+                </p>
+              )}
+            </div>
           </div>
         ) : error ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
