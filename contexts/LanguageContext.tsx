@@ -122,6 +122,8 @@ const translations: Translations = {
     "sim_impact": "模拟瞬间撞击",
     "permission_denied": "权限被拒绝，摔倒监测无法运行。",
     "req_perm_fail": "无法发起权限请求，请刷新页面。",
+    "fall_confirm_speech": "检测到您摔了一下，您还好吗？",
+    "fall_recovered_speech": "检测到您已恢复活动。",
 
     // Emergency
     "fall_alert": "摔倒警报！",
@@ -347,6 +349,8 @@ const translations: Translations = {
     "sim_impact": "模擬瞬間撞擊",
     "permission_denied": "權限被拒絕，跌倒監測無法運行。",
     "req_perm_fail": "無法發起權限請求，請刷新頁面。",
+    "fall_confirm_speech": "檢測到您摔了一下，您還好嗎？",
+    "fall_recovered_speech": "檢測到您已恢復活動。",
 
     "fall_alert": "跌倒警報！",
     "countdown_msg": "確認呼救倒計時",
@@ -570,6 +574,8 @@ const translations: Translations = {
     "sim_impact": "Sim Impact",
     "permission_denied": "Permission denied.",
     "req_perm_fail": "Permission request failed. Refresh.",
+    "fall_confirm_speech": "Detected a fall, are you okay?",
+    "fall_recovered_speech": "Activity detected, you seem fine.",
 
     "fall_alert": "Fall Alert!",
     "countdown_msg": "Calling in...",
@@ -737,4 +743,3 @@ export const useLanguage = () => {
   }
   return context;
 };
-    

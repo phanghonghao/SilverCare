@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decode, decodeAudioData } from "../utils/audioUtils";
-import { SyncData, HealthLog, WAKE_WORD_REGEX, RemoteConfig, Alarm } from "../types";
+import { SyncData, HealthLog, WAKE_WORD_REGEX, RemoteConfig, Alarm, Language } from "../types";
 
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
@@ -17,17 +17,86 @@ const CACHE_EXPIRY = 2 * 60 * 60 * 1000;
 let isQuotaExhaustedGlobal = false;
 export const checkQuotaStatus = () => isQuotaExhaustedGlobal;
 
-// --- DataSyncManager 实时同步引擎 ---
+const getCurrentLanguage = (): Language => {
+  return (localStorage.getItem('SILVERCARE_LANGUAGE') as Language) || 'zh-CN';
+};
+
+// --- LanguageInterceptor: 多语言感知核心 ---
+class LanguageInterceptor {
+  static interceptQuery(query: string, lang: Language): string {
+    const regionalContext = query.includes("巴生") || query.includes("Klang") ? "Port Klang, Malaysia" : "";
+    
+    if (lang === 'en') {
+      return `[Strict Language: English] Search specifically for English content and sources. Location: ${regionalContext || 'local area'}. Query: ${query}. Ensure the final output is entirely in simple English.`;
+    } else if (lang === 'zh-TW') {
+      return `[语言：繁体中文] 搜索当地资讯。位置：${regionalContext || '当地'}。内容：${query}。请确保输出结果为繁体中文。`;
+    }
+    return `[语言：简体中文] 搜索当地资讯。位置：${regionalContext || '当地'}。内容：${query}。`;
+  }
+
+  static getSystemInstruction(lang: Language): string {
+    if (lang === 'en') {
+      return "You are Xiao Ling, a warm AI assistant for the elderly. STIPULATION: You MUST respond in English. If you find information in other languages, translate it to simple, friendly English. Keep it concise.";
+    }
+    return "你是贴心助手小玲。回复必须使用当前界面语言（简体/繁体中文）。将检索到的内容总结为适合老年人听的口语化文字。严禁中英混杂。";
+  }
+
+  static getSearchingStatus(type: 'weather' | 'news', lang: Language): string {
+    if (lang === 'en') return `Searching ${type} in English...`;
+    if (lang === 'zh-TW') return `正在以繁體中文搜尋${type === 'news' ? '新聞' : '天氣'}...`;
+    return `正在查询${type === 'news' ? '新闻' : '天气'}...`;
+  }
+}
+
+// --- SearchManager: 联网内容引擎 ---
+export class SearchManager {
+  static async fetch(type: 'weather' | 'news', lat: number, lng: number) {
+    try {
+      const lang = getCurrentLanguage();
+      const ai = getAI();
+      const locInfo = (lat !== 0) ? `Location(${lat.toFixed(2)}, ${lng.toFixed(2)})` : "the current local area";
+      
+      let prompt = type === 'weather' 
+        ? `Describe current weather and temperature at ${locInfo}. Max 20 words.` 
+        : `Summarize 2 top news stories happening at ${locInfo}.`;
+      
+      // 执行语言拦截与重写
+      const interceptedPrompt = LanguageInterceptor.interceptQuery(prompt, lang);
+
+      const response = await ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: interceptedPrompt,
+        config: { 
+          tools: [{ googleSearch: {} }], 
+          systemInstruction: LanguageInterceptor.getSystemInstruction(lang)
+        }
+      });
+      
+      isQuotaExhaustedGlobal = false;
+      const result = { 
+        text: response.text || (lang === 'en' ? "Information unavailable." : "暂时查不到信息。"), 
+        groundingChunks: response.candidates?.[0]?.groundingMetadata?.groundingChunks || [],
+        statusMsg: LanguageInterceptor.getSearchingStatus(type, lang)
+      };
+      setCachedData(type, result);
+      return result;
+    } catch (error: any) {
+      if (error.message?.includes('429')) isQuotaExhaustedGlobal = true;
+      const lang = getCurrentLanguage();
+      return { text: lang === 'en' ? "Search failed." : "搜索失败。", groundingChunks: [], statusMsg: "" };
+    }
+  }
+}
+
+// --- DataSyncManager ---
 export class DataSyncManager {
-  // 父母端：推送实时状态
   static async pushStatus(data: Partial<SyncData>) {
     const current = this.getLatestSyncData();
     const updated = { ...current, ...data, last_heartbeat: Date.now() };
     localStorage.setItem(CLOUD_SYNC_KEY, btoa(JSON.stringify(updated)));
-    window.dispatchEvent(new Event('storage')); // 触发本地跨标签订阅
+    window.dispatchEvent(new Event('storage'));
   }
 
-  // 子女端：推送远程配置（如修改闹钟）
   static async pushConfig(config: Partial<RemoteConfig>) {
     const current = this.getRemoteConfig();
     const updated = { ...current, ...config };
@@ -50,14 +119,12 @@ export class DataSyncManager {
     return raw ? JSON.parse(raw) : { alarms: [], volume: 80, target_reminder_ids: [] };
   }
 
-  // 模拟 Firebase 订阅
   static subscribe(callback: () => void) {
     window.addEventListener('storage', callback);
     return () => window.removeEventListener('storage', callback);
   }
 }
 
-// --- 基础服务保持不变 ---
 export const getCachedData = (type: 'weather' | 'news') => {
   const key = type === 'weather' ? CACHE_WEATHER_KEY : CACHE_NEWS_KEY;
   const raw = localStorage.getItem(key);
@@ -106,14 +173,18 @@ class TTSManager {
   private async playSentenceWithRetry(text: string): Promise<void> {
     try {
       const ai = getAI();
-      const prompt = `Please read the following text aloud: ${simplifyContent(text, 50)}`;
+      const lang = getCurrentLanguage();
+      // 根据语言环境选择发音人：英文使用 Zephyr，中文使用 Kore
+      const voiceName = lang === 'en' ? 'Zephyr' : 'Kore';
+      
+      const prompt = `Read clearly: ${text}`;
       const response = await ai.models.generateContent({
         model: TTS_MODEL,
         contents: [{ parts: [{ text: prompt }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           temperature: 0,
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
         }
       });
       const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -147,7 +218,6 @@ class TTSManager {
 }
 
 const ttsManager = new TTSManager();
-// 修改这里：增加 immediate 参数，默认为 true (兼容旧代码)，但在流式输出时可以设为 false (追加模式)
 export const playTTS = (text: string, immediate: boolean = true) => ttsManager.speak(text, immediate);
 export const stopTTS = () => ttsManager.stop();
 
@@ -160,70 +230,51 @@ const getAI = () => {
 };
 
 export const fetchWeatherOrNews = async (type: 'weather' | 'news', lat: number, lng: number) => {
-  try {
-    const ai = getAI();
-    const locInfo = (lat !== 0) ? `坐标(${lat.toFixed(2)}, ${lng.toFixed(2)})` : "当地";
-    const prompt = type === 'weather' ? `请通过搜索，告诉我${locInfo}现在的天气、气温。20字内极简回复。` : `请通过搜索，播报2条${locInfo}最新的重要简短新闻标题。`;
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
-      contents: prompt,
-      config: { tools: [{ googleSearch: {} }], systemInstruction: "你是关怀助手小玲。回复必须极简、口语化，适合老年人听。" }
-    });
-    isQuotaExhaustedGlobal = false;
-    const result = { text: response.text || "刚才没查到，请过会儿再试。", groundingChunks: response.candidates?.[0]?.groundingMetadata?.groundingChunks || [] };
-    setCachedData(type, result);
-    return result;
-  } catch (error: any) {
-    if (error.message?.includes('429')) isQuotaExhaustedGlobal = true;
-    return { text: "暂时没查到。", groundingChunks: [] };
-  }
+  return await SearchManager.fetch(type, lat, lng);
 };
 
 export const getGeminiResponse = async (prompt: string) => {
   try {
     const ai = getAI();
+    const lang = getCurrentLanguage();
     const response = await ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
-      config: { systemInstruction: "你是小玲。回复极简，每句不超过15字。" }
+      config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
     isQuotaExhaustedGlobal = false;
-    return response.text || "没听清，再说一遍。";
+    return response.text || (lang === 'en' ? "Pardon?" : "没听清，再说一遍。");
   } catch (error: any) { 
     if (error.message?.includes('429')) isQuotaExhaustedGlobal = true;
-    return "系统正在休息。"; 
+    return "Error"; 
   }
 };
 
-// 新增流式响应方法
 export async function* getGeminiResponseStream(prompt: string) {
   try {
     const ai = getAI();
+    const lang = getCurrentLanguage();
+    
     const responseStream = await ai.models.generateContentStream({
       model: TEXT_MODEL,
       contents: prompt,
       config: { 
-        // 优化人设：更耐心，允许更多内容
-        systemInstruction: "你是小玲，老人的贴身智能儿女。针对老年人，回复要温暖、耐心、口语化。不要使用冷冰冰的机器语言。如果老人问健康或操作问题，可以适当多解释几句，但要分点说，语速要慢（通过标点符号控制）。",
-        // 提升 Token 限制，防止回复被截断
-        maxOutputTokens: 5000, 
+        systemInstruction: LanguageInterceptor.getSystemInstruction(lang),
+        maxOutputTokens: 2000, 
       }
     });
 
     isQuotaExhaustedGlobal = false;
-    
     for await (const chunk of responseStream) {
-      if (chunk.text) {
-        yield chunk.text;
-      }
+      if (chunk.text) yield chunk.text;
     }
   } catch (error: any) {
-    // 捕获 429 错误（免费版 Key 常见限制）
     if (error.message?.includes('429')) {
       isQuotaExhaustedGlobal = true;
-      yield "小玲现在有点忙（系统正忙），请稍等一下再跟我说话好吗？";
+      const lang = getCurrentLanguage();
+      yield lang === 'en' ? "I'm busy, one moment please." : "小玲现在有点忙，请稍等。";
     } else {
-      yield "小玲刚才没听清，请再说一遍。";
+      yield "...";
     }
   }
 }
@@ -231,48 +282,28 @@ export async function* getGeminiResponseStream(prompt: string) {
 export const determineUserIntent = async (text: string) => {
   try {
     const ai = getAI();
+    const lang = getCurrentLanguage();
     const prompt = `
-      You are an intent classifier for an elderly care app "SilverCare".
       User text: "${text}"
-      
-      Available Routes:
-      - home
-      - chat (聊天/说话)
-      - reminders (吃药/提醒)
-      - vision (认东西/拍照/帮我看)
-      - family (留言/子女)
-      - alarm (闹钟)
-      - safety (摔倒监测/安全)
-      - live_call (视频/通话/视讯/找人)
-      - weather_news (data.type: 'weather' or 'news')
-      
+      Current Language: ${lang}
+      Routes: home, chat, reminders, vision, family, alarm, safety, live_call, weather_news
       Output JSON only:
       {
         "action": "NAVIGATE" | "REPLY" | "STAY",
-        "route": "AppRoute enum value string" (optional),
-        "data": { "type": "weather" | "news" } (optional),
-        "reply": "Text to speak if action is REPLY or STAY" (optional)
+        "route": "AppRoute string",
+        "data": { "type": "weather" | "news" },
+        "reply": "Simple warm response in ${lang}"
       }
-      
-      Examples:
-      "看看今天天气" -> {"action": "NAVIGATE", "route": "weather_news", "data": {"type": "weather"}}
-      "打开视讯" -> {"action": "NAVIGATE", "route": "live_call"}
-      "我要视频" -> {"action": "NAVIGATE", "route": "live_call"}
-      "给儿子打视频" -> {"action": "NAVIGATE", "route": "live_call"}
-      "听新闻" -> {"action": "NAVIGATE", "route": "weather_news", "data": {"type": "news"}}
-      "你是谁" -> {"action": "REPLY", "reply": "我是您的贴身助手小玲。"}
-      "不用了" -> {"action": "REPLY", "reply": "好的，有事您叫我。"}
     `;
-    
     const response = await ai.models.generateContent({
       model: TEXT_MODEL,
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
-    
     return JSON.parse(response.text || '{}');
   } catch (e) {
-    return { action: "STAY", reply: "我没听清，您能再说一遍吗？" };
+    const lang = getCurrentLanguage();
+    return { action: "STAY", reply: lang === 'en' ? "Pardon?" : "没听明白。" };
   }
 };
 
@@ -283,24 +314,32 @@ export const addSafetyLog = (log: HealthLog) => {
   window.dispatchEvent(new Event('storage'));
 };
 export const getSafetyLogs = (): HealthLog[] => JSON.parse(localStorage.getItem(SAFETY_LOG_KEY) || '[]');
+
 export const identifyPerson = async (img: string) => {
   try {
     const ai = getAI();
-    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "门口是谁？" }] } });
-    return res.text || "看不清。";
-  } catch (e: any) { return "识别失败。"; }
+    const lang = getCurrentLanguage();
+    const res = await ai.models.generateContent({ 
+      model: TEXT_MODEL, 
+      contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Who is at the door?" }] },
+      config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
+    });
+    return res.text || "...";
+  } catch (e: any) { return "Error"; }
 };
+
 export const verifyMedication = async (img: string, name: string) => {
   try {
     const ai = getAI();
-    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: `核对${name}` }] }, config: { responseMimeType: "application/json" } });
+    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: `Verify ${name}` }] }, config: { responseMimeType: "application/json" } });
     return JSON.parse(res.text);
-  } catch (e) { return { verified: true, description: "核对成功" }; }
+  } catch (e) { return { verified: true, description: "OK" }; }
 };
+
 export const analyzeUserRole = async (img: string) => {
   try {
     const ai = getAI();
-    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "角色识别" }] }, config: { responseMimeType: "application/json" } });
+    const res = await ai.models.generateContent({ model: TEXT_MODEL, contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Identify role" }] }, config: { responseMimeType: "application/json" } });
     return JSON.parse(res.text);
   } catch (e) { return { role: 'elderly' }; }
 };
@@ -308,34 +347,12 @@ export const analyzeUserRole = async (img: string) => {
 export const explainEverything = async (img: string) => {
   try {
     const ai = getAI();
-    const promptText = `
-请根据提供的图片内容，用“适合老年人的讲解方式”来说明物品。
-
-必须严格按照以下结构输出（请保持标题格式）：
-1. 这是什么
-2. 它是做什么用的
-3. 一般要怎么用
-4. 它为什么能做到这些（简单说）
-5. 使用时要注意什么
-6. 常见疑问
-7. 一句话总结
-
-要求：
-- 使用简体中文
-- 语气亲切、慢节奏，像儿女跟父母聊天一样
-- 绝对不使用专业术语，如果必须用，请用生活化比喻解释
-- 假设读者完全不懂科技
-- 既然是给老人看，字体排版要清晰，分段要明确
-`;
+    const lang = getCurrentLanguage();
     const res = await ai.models.generateContent({ 
         model: TEXT_MODEL, 
-        contents: { 
-            parts: [
-                { inlineData: { mimeType: 'image/jpeg', data: img } }, 
-                { text: promptText }
-            ] 
-        } 
+        contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: img } }, { text: "Explain this item simply." }] },
+        config: { systemInstruction: LanguageInterceptor.getSystemInstruction(lang) }
     });
-    return res.text || "没看清，请再拍一次。";
-  } catch (e: any) { return "识别失败，请检查网络。"; }
+    return res.text || "...";
+  } catch (e: any) { return "Error"; }
 };

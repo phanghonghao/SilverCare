@@ -9,12 +9,13 @@ interface WeatherNewsViewProps {
 }
 
 const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [loadingStep, setLoadingStep] = useState<'locating' | 'fetching' | 'done'>('locating');
   const [content, setContent] = useState('');
   const [groundingChunks, setGroundingChunks] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [isFromCache, setIsFromCache] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
 
   useEffect(() => {
     let isMounted = true;
@@ -32,7 +33,8 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
       }
 
       if (checkQuotaStatus()) {
-        setError("小玲太累了，正在休息，请等一会儿再问我好吗？");
+        const quotaMsg = language === 'en' ? "Xiao Ling is taking a break. Try later." : "小玲正在休息，请等会儿再问我。";
+        setError(quotaMsg);
         setLoadingStep('done');
         return;
       }
@@ -69,6 +71,7 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
         if (!isMounted) return;
         setContent(result.text);
         setGroundingChunks(result.groundingChunks);
+        setStatusMsg(result.statusMsg || '');
         setLoadingStep('done');
         setIsFromCache(false);
         
@@ -77,18 +80,22 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
         }
       } catch (err) {
         if (!isMounted) return;
-        setError("哎呀，信号不好。");
+        setError(language === 'en' ? "Connection error." : "网络有点不给力。");
         setLoadingStep('done');
       }
     };
 
     loadData();
     return () => { isMounted = false; };
-  }, [type]);
+  }, [type, language]);
 
   const getStepText = () => {
-    if (loadingStep === 'locating') return "正在看您在哪里...";
-    if (loadingStep === 'fetching') return "小玲正在联网查信息...";
+    if (loadingStep === 'locating') return language === 'en' ? "Finding your location..." : "正在看您在哪里...";
+    if (loadingStep === 'fetching') {
+      if (language === 'en') return `Searching ${type} in English...`;
+      if (language === 'zh-TW') return `正在以繁體中文搜尋${type === 'news' ? '新聞' : '天氣'}...`;
+      return `小玲正在查询最新${type === 'news' ? '新闻' : '天气'}...`;
+    }
     return "";
   };
 
@@ -100,7 +107,7 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
         </h2>
         <button 
           onClick={onBack}
-          className="bg-slate-100 px-6 py-2 rounded-full font-bold text-slate-600 active-scale shadow-sm border border-slate-200"
+          className="bg-white px-6 py-2 rounded-full font-bold text-slate-600 active-scale shadow-sm border border-slate-200"
         >
           {t('back')}
         </button>
@@ -123,7 +130,7 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
           <div className="space-y-6 animate-fade-in">
             {isFromCache && (
                <div className="bg-blue-50 text-blue-600 text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1 font-bold">
-                 ⚡ 已同步最新内容
+                 ⚡ {language === 'en' ? 'Synced Latest' : '已同步最新内容'}
                </div>
             )}
             <p className="text-3xl leading-relaxed text-slate-800 font-black whitespace-pre-wrap">
@@ -154,7 +161,7 @@ const WeatherNewsView: React.FC<WeatherNewsViewProps> = ({ type, onBack }) => {
       </div>
 
       <div className="mt-8 text-center">
-        <p className="text-slate-400 text-sm font-bold opacity-60">小玲智能引擎驱动</p>
+        <p className="text-slate-400 text-sm font-bold opacity-60">Xiao Ling Intelligence Drive</p>
       </div>
     </div>
   );

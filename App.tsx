@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { AppRoute, Reminder, Alarm, UserRole, SyncData, HealthLog, INTENT_KEYWORDS, RemoteConfig, MedRecord } from './types';
 import { STORAGE_KEY_NAME, getActiveApiKey, addSafetyLog, matchWakeWord, playTTS, fetchWeatherOrNews, checkQuotaStatus, getCachedData, DataSyncManager, determineUserIntent } from './services/geminiService';
@@ -109,7 +110,7 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // 强化语音控制与实时监控
+  // 改进的语音监听逻辑
   useEffect(() => {
     if (userRole !== UserRole.ELDERLY || !hasApiKey || currentRoute === AppRoute.LIVE_CALL) {
       setIsListeningForVoice(false);
@@ -117,7 +118,6 @@ const App: React.FC = () => {
     }
 
     let isMounted = true;
-
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitRecognition;
     if (!SpeechRecognition) return;
 
@@ -131,13 +131,15 @@ const App: React.FC = () => {
       let interimTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
-          handleVoiceCommand(event.results[i][0].transcript);
+          const finalResult = event.results[i][0].transcript;
+          handleVoiceCommand(finalResult);
         } else {
           interimTranscript += event.results[i][0].transcript;
         }
       }
 
-      if (interimTranscript) {
+      // 实时更新显示，无论何种状态
+      if (interimTranscript.trim()) {
         setRawText(interimTranscript); 
         setIsListeningForVoice(true);
         setRmsVolume(isWaitingForCommand ? 100 : 40);
@@ -146,6 +148,7 @@ const App: React.FC = () => {
         vadTimerRef.current = window.setTimeout(() => {
           if (interimTranscript.trim().length > 0) {
             handleVoiceCommand(interimTranscript);
+            recognition.stop(); 
           }
         }, isWaitingForCommand ? 800 : 1800); 
       }
@@ -154,23 +157,14 @@ const App: React.FC = () => {
     const handleVoiceCommand = async (text: string) => {
       if (quotaHit || !text.trim()) return;
       
-      setRawText(text);
+      setRawText(text); // 确保最后一段语音能被显示
       setIsIntentActive(false);
 
       const hasWakeWord = matchWakeWord(text);
 
-      if (hasWakeWord && (INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) || INTENT_KEYWORDS.WEATHER.some(k => text.includes(k)))) {
-         const type = INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) ? 'news' : 'weather';
-         setParsedIntent(`直达 -> ${type === 'news' ? '新闻' : '天气'}`);
-         setIsIntentActive(true);
-         setWeatherNewsType(type);
-         setRoute(AppRoute.WEATHER_NEWS);
-         setIsWaitingForCommand(false);
-         return;
-      }
-
+      // 如果当前是“等待指令”状态，无论有没有唤醒词，都进行意图解析
       if (isWaitingForCommand) {
-        setIsWaitingForCommand(false);
+        setIsWaitingForCommand(false); // 消耗掉这次唤醒状态
         setParsedIntent("正在解析...");
         
         const intent = await determineUserIntent(text);
@@ -191,14 +185,29 @@ const App: React.FC = () => {
         return;
       }
 
+      // 场景：尚未唤醒，但检测到唤醒词
       if (hasWakeWord) {
-        setParsedIntent("已唤醒: 倾听指令...");
+        // 1. 检查是否是“一句话直达” (e.g. "小玲你好，看新闻")
+        if (INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) || INTENT_KEYWORDS.WEATHER.some(k => text.includes(k))) {
+           const type = INTENT_KEYWORDS.NEWS.some(k => text.includes(k)) ? 'news' : 'weather';
+           setParsedIntent(`直达 -> ${type === 'news' ? '新闻' : '天气'}`);
+           setIsIntentActive(true);
+           setWeatherNewsType(type);
+           setRoute(AppRoute.WEATHER_NEWS);
+           return;
+        }
+
+        // 2. 纯唤醒
+        setParsedIntent("唤醒成功: 倾听中...");
         setIsIntentActive(true);
-        recognition.stop();
+        recognition.stop(); // 停止当前段，准备播放
         setIsListeningForVoice(false);
+        
         await playTTS("哎，我在呢，您想做什么？");
+        
+        // 设置状态：下一段语音将直接作为指令解析
         setIsWaitingForCommand(true);
-        setRawText("请说出您的指令...");
+        setRawText("请下达指令...");
         return;
       }
     };
@@ -255,11 +264,9 @@ const App: React.FC = () => {
         onToggle={(id) => {
           const r = reminders.find(item => item.id === id);
           if (r && !r.completed) {
-            // 跳转到录制页面
             setMedToCapture(r.title);
             setRoute(AppRoute.MED_CAPTURE);
           } else {
-            // 取消完成
             setReminders(p => p.map(item => item.id === id ? {...item, completed: !item.completed} : item));
           }
         }} 
@@ -270,7 +277,6 @@ const App: React.FC = () => {
       case AppRoute.SAFETY: return <FallMonitor onBack={handleBack} onFallDetected={() => setIsEmergency(true)} />;
       case AppRoute.LIVE_CALL: return <LiveCall onEnd={handleBack} voiceSwitchTrigger={cameraSwitchTrigger} initialPrompt={initialPrompt} />;
       case AppRoute.WEATHER_NEWS: return <WeatherNewsView type={weatherNewsType} onBack={handleBack} />;
-      
       case AppRoute.MED_CAPTURE: return medToCapture ? <MedicationCapture 
         medName={medToCapture} 
         isForced={isForcedMedMode} 
@@ -279,7 +285,6 @@ const App: React.FC = () => {
           setHasMedMedal(true); 
           setIsForcedMedMode(false); 
           setMedToCapture(null); 
-          // 录制完成后，如果不是强制模式（闹钟），则返回列表页查看打勾状态
           setRoute(isForcedMedMode ? AppRoute.HOME : AppRoute.REMINDERS); 
         }} 
         onCancel={() => { 
@@ -288,7 +293,6 @@ const App: React.FC = () => {
           setRoute(AppRoute.REMINDERS); 
         }} 
       /> : <Home setRoute={setRoute} handleGoWeatherNews={(t) => { setWeatherNewsType(t); setRoute(AppRoute.WEATHER_NEWS); }} reminders={reminders} />;
-      
       default: return <Home setRoute={setRoute} handleGoWeatherNews={(t) => { setWeatherNewsType(t); setRoute(AppRoute.WEATHER_NEWS); }} reminders={reminders} hasMedal={hasMedMedal} />;
     }
   };
@@ -309,6 +313,7 @@ const App: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen ${isWideLayout ? 'max-w-4xl' : 'max-w-md'} mx-auto bg-slate-50 shadow-2xl overflow-hidden relative pt-14`}>
+      {/* 增强型语音监视器 (Voice Monitor Bar) */}
       {userRole === UserRole.ELDERLY && currentRoute !== AppRoute.LIVE_CALL && (
         <div className="absolute top-0 left-0 right-0 z-[2000] bg-slate-900 shadow-2xl border-b border-white/10">
            <div className="flex items-center h-12 px-3 gap-3">
@@ -323,7 +328,9 @@ const App: React.FC = () => {
                     </div>
                  </div>
               </div>
+              
               <div className="w-px h-6 bg-white/10 shrink-0"></div>
+
               <div className="flex flex-col flex-1 overflow-hidden">
                  <span className="text-[7px] font-black text-emerald-500 uppercase tracking-tighter leading-none mb-0.5">INTENT</span>
                  <div className="flex items-center gap-1.5 overflow-hidden">
@@ -334,6 +341,7 @@ const App: React.FC = () => {
                  </div>
               </div>
            </div>
+           
            {isWaitingForCommand && (
              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 animate-[pulse_1s_infinite]"></div>
            )}

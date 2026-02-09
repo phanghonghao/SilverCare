@@ -11,9 +11,9 @@ interface FallMonitorProps {
 
 enum DetectionState {
   IDLE,
-  POTENTIAL_FALL, // 疑似失重
-  IMPACT_DETECTED, // 检测到撞击
-  MONITORING_STILLNESS, // 正在观察静止
+  POTENTIAL_FALL,
+  IMPACT_DETECTED,
+  MONITORING_STILLNESS,
 }
 
 const FallMonitor: React.FC<FallMonitorProps> = ({ onFallDetected, onBack }) => {
@@ -38,26 +38,38 @@ const FallMonitor: React.FC<FallMonitorProps> = ({ onFallDetected, onBack }) => 
     setIsActive(false);
     if (wakeLock.current) { wakeLock.current.release(); wakeLock.current = null; }
     detectionState.current = DetectionState.IDLE;
-    // 停止时同步状态
     DataSyncManager.pushStatus({ is_falling: false });
   };
 
   const startMonitoring = async () => {
     setError(null);
+    // Explicit user gesture required for permission on iOS and some modern browsers
     if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
       try {
         const permission = await (DeviceMotionEvent as any).requestPermission();
-        if (permission === 'granted') { setIsActive(true); await requestWakeLock(); }
-        else { setError(t('permission_denied')); }
-      } catch (e) { setError(t('req_perm_fail')); }
+        if (permission === 'granted') { 
+          setIsActive(true); 
+          await requestWakeLock(); 
+        } else { 
+          setError(t('permission_denied')); 
+        }
+      } catch (e) { 
+        setError(t('req_perm_fail')); 
+      }
     } else {
-      setIsActive(true);
-      await requestWakeLock();
+      // For browsers that don't require explicit requestPermission
+      try {
+        setIsActive(true);
+        await requestWakeLock();
+      } catch (e) {
+        setError(t('req_perm_fail'));
+      }
     }
   };
 
   useEffect(() => {
     if (!isActive) return;
+    
     const handleMotion = (event: DeviceMotionEvent) => {
       const ag = event.accelerationIncludingGravity;
       if (!ag) return;
@@ -78,15 +90,14 @@ const FallMonitor: React.FC<FallMonitorProps> = ({ onFallDetected, onBack }) => 
         case DetectionState.IMPACT_DETECTED:
           if (now - lastStateChange.current > 1000) {
             detectionState.current = DetectionState.MONITORING_STILLNESS; lastStateChange.current = now;
-            playTTS("检测到您摔了一下，您还好吗？");
-            // 同步疑似跌倒状态至云端，子女端会收到初步预警
+            playTTS(t('fall_confirm_speech') || "Detected a fall, are you okay?");
             DataSyncManager.pushStatus({ is_falling: true, user_status: 'intense' });
           }
           break;
         case DetectionState.MONITORING_STILLNESS:
           if (Math.abs(mag - 9.8) > 3.0) {
             detectionState.current = DetectionState.IDLE; stopTTS();
-            playTTS("检测到您已恢复活动。");
+            playTTS(t('fall_recovered_speech') || "Activity detected, you seem fine.");
             DataSyncManager.pushStatus({ is_falling: false, user_status: 'walking' });
           } else if (now - lastStateChange.current > 6000) {
             detectionState.current = DetectionState.IDLE;
@@ -95,13 +106,13 @@ const FallMonitor: React.FC<FallMonitorProps> = ({ onFallDetected, onBack }) => 
           break;
       }
     };
+
     window.addEventListener('devicemotion', handleMotion, true);
     return () => window.removeEventListener('devicemotion', handleMotion, true);
-  }, [isActive]);
+  }, [isActive, t]);
 
   const triggerAlert = () => {
-    addSafetyLog({ id: Date.now().toString(), type: 'fall', timestamp: Date.now(), detail: "检测到剧烈撞击且长时间静止", statusText: "紧急求助已发起" });
-    // 推送最高级别云端警报
+    addSafetyLog({ id: Date.now().toString(), type: 'fall', timestamp: Date.now(), detail: "Detected impact followed by stillness", statusText: "Emergency alert sent" });
     DataSyncManager.pushStatus({ is_falling: true, user_status: 'intense' });
     onFallDetected();
   };
@@ -158,4 +169,3 @@ const FallMonitor: React.FC<FallMonitorProps> = ({ onFallDetected, onBack }) => 
 };
 
 export default FallMonitor;
-    
